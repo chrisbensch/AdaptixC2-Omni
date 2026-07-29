@@ -4,7 +4,7 @@ A reproducible, pinned, single-command build of the [AdaptixC2](https://github.c
 
 Originally bootstrapped from Mitchell's [AdaptixC2 + Kharon installation guide](https://mitchells-journal.gitbook.io/writings/adaptixc2-and-nakasendo/0.1.-adaptixc2-and-kharon-installation-guide); this repo replaces the manual setup with a checked-in, version-pinned build harness so the same artifact can be reproduced anywhere with one clone + one build.
 
-This repository **does not fork** any upstream project. It tracks the four upstream repos as git submodules pinned to specific commits, builds them together via a unified `Dockerfile`, and applies a single small build-time patch from `patches/` so submodule trees stay clean. The intent is: clone, build, run — and reproduce the exact same artifact on any machine, today or in six months.
+This repository **does not fork** any upstream project. It tracks the four upstream repos as git submodules pinned to specific commits, builds them together via a unified `Dockerfile`, and applies tracked build-time patches from `patches/` so submodule trees stay clean. The intent is: clone, build, run — with each upstream snapshot and build customization explicitly recorded.
 
 > **Authorized use only.** AdaptixC2, Kharon, and the BOF/post-ex modules included here are red-team and adversary-emulation tooling. Use them only against systems you own or are explicitly authorized to test. Upstream license terms (see each submodule's `LICENSE`) apply to that code.
 
@@ -177,6 +177,7 @@ AdaptixC2-Omni/
 │   ├── 404page.html                 ← defensive nginx-shaped 404 (overrides upstream's framework-branded page)
 │   └── Dockerfile.windows-client    ← Windows Server Core + MSYS2 client build image
 ├── patches/              ← build-time patches against submodules
+│   ├── adaptixserver-go-dependencies.patch
 │   ├── adaptixclient-macos-bundle.patch
 │   ├── adaptixclient-kali-arm64-stage.patch
 │   └── extension-kit-nanodump-host-strip.patch
@@ -205,6 +206,7 @@ Every customization is either a workspace-root file we authored or a tracked pat
 | Kharon + AxScripts wired into server profile | `profile.kharon.yaml` | Adds the two Kharon extenders and the two AxScript module sets to the upstream default profile. Also strips the framework-fingerprint 404 headers (`Server: AdaptixC2`, `Adaptix-Version: v1.2`) for a `Server: nginx` decoy. |
 | First-start bootstrap entrypoint | `docker/entrypoint.sh` | Renders the profile template, generates the TLS cert, persists credentials, then drops privileges to UID 10001 via `gosu`. Replaces the upstream inline cert-only entrypoint. |
 | Defensive 404 page | `docker/404page.html` | Overrides upstream's `<h1>AdaptixC2 404</h1>` page with an nginx-default-shaped body that matches the `Server: nginx` header decoy. COPYed in the Dockerfile after the upstream dist COPY. |
+| Fixed Go dependency floors | `patches/adaptixserver-go-dependencies.patch` | Raises `golang.org/x/{crypto,image,net,text}` to fixed versions in the primary server module before `go work sync`, so the server and every extender compile against the same remediated workspace build list without changing the pinned submodule. |
 | macOS bundle CMake additions | `patches/adaptixclient-macos-bundle.patch` | Upstream `AdaptixClient/CMakeLists.txt` doesn't set `MACOSX_BUNDLE`, so a plain `make` produces a bare exe. The patch adds an `if(APPLE)` block setting bundle properties; `scripts/build-client-macos.sh` applies and reverts it around each build. |
 | nanodump host-strip fix | `patches/extension-kit-nanodump-host-strip.patch` | Upstream nanodump strips its host-built `restore_signature` ELF with the Windows cross-strip, which breaks on arm64 hosts. The patch deletes the redundant strip line; `gcc -s` on the prior line already strips it. Applied inside the build container by the Dockerfile. |
 | arm64 client build via kali-rolling | `patches/adaptixclient-kali-arm64-stage.patch` | aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x, so the upstream `build-client` Dockerfile stage can't target arm64. The patch appends a new `build-client-kali` stage that uses kali-rolling's distro Qt 6.10.2 + `linuxdeploy` instead. Purely additive — the original `build-client` stage is unchanged, so amd64 builds are byte-equivalent to upstream. Applied on the host by `scripts/build-client-linux.sh` with auto-revert. |
@@ -248,15 +250,16 @@ git fetch origin
 git checkout <new-tag-or-sha>
 cd ..
 
-# Confirm our patch still applies cleanly to the new tree
-git -C AdaptixC2 apply --check patches/adaptixclient-macos-bundle.patch
+# Confirm our patches still apply cleanly to the new tree
+git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch
+git -C AdaptixC2 apply --check ../patches/adaptixclient-macos-bundle.patch
 
 # Commit the bump
 git add AdaptixC2
 git commit -m "Bump AdaptixC2 to <new-tag>"
 ```
 
-If `git apply --check` fails, the upstream `CMakeLists.txt` has drifted into the patch's hunks; regenerate it manually per [BLUEPRINT.md §10](./BLUEPRINT.md). Repeat the same flow for the other three submodules. For full diff-check guidance (profile merges, Dockerfile inheritance, toolchain dep changes), follow the §10 upgrade path in BLUEPRINT.md end-to-end.
+If either `git apply --check` command fails, upstream has drifted into that patch's hunks. Retire a patch when upstream includes the fix, or regenerate it per [BLUEPRINT.md §10](./BLUEPRINT.md). Repeat the same flow for the other three submodules. For full diff-check guidance (dependency floors, profile merges, Dockerfile inheritance, and toolchain changes), follow the §10 upgrade path in BLUEPRINT.md end-to-end.
 
 ---
 
