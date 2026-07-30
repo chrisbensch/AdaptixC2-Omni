@@ -29,7 +29,7 @@ The workspace itself is a git repo. The four upstream projects are git **submodu
 ├── LICENSE               ← MIT license (build harness only; submodule contents under their own licenses)
 │
 ├── scripts/                                       ← host-side build helpers (callable from repo root)
-│   ├── build-client-linux.sh                      ← Linux AppImage build (amd64 + arm64) via Docker; §5.2 + §6.4
+│   ├── build-client-linux.sh                      ← Linux AppImage build (amd64 + arm64) via Docker; §5.2 + §6.5
 │   ├── build-client-macos.sh                      ← native macOS .app build (Apple Silicon arm64); §5.4
 │   ├── build-client-windows-container.ps1         ← Windows exe build via Windows container; §11.2
 │   └── install-prereqs-windows.ps1                ← Windows prerequisite installer (MSYS2 + MinGW64 + Qt6); §11
@@ -40,9 +40,10 @@ The workspace itself is a git repo. The four upstream projects are git **submodu
 │   └── 404page.html                               ← defensive nginx-shaped 404 page; overrides upstream branded page (§5.9)
 │
 ├── patches/                                       ← build-time patches against submodules
+│   ├── adaptixserver-go-dependencies.patch        ← see §5.5 / §6.3
 │   ├── adaptixclient-macos-bundle.patch           ← see §5.5 / §6.1
-│   ├── adaptixclient-kali-arm64-stage.patch       ← see §5.5 / §6.4
-│   └── extension-kit-nanodump-host-strip.patch    ← see §5.5 / §6.3
+│   ├── adaptixclient-kali-arm64-stage.patch       ← see §5.5 / §6.5
+│   └── extension-kit-nanodump-host-strip.patch    ← see §5.5 / §6.4
 │
 ├── .github/
 │   └── workflows/
@@ -52,7 +53,7 @@ The workspace itself is a git repo. The four upstream projects are git **submodu
 └── AdaptixClient-dist/   ← created during builds; AppImage and .app land here (gitignored)
 ```
 
-Host: macOS Apple Silicon (arm64). The server image builds for the **host architecture by default** — native arm64 builds on Apple Silicon (≈6 min), or set `DOCKER_DEFAULT_PLATFORM=linux/amd64` to force amd64 under QEMU emulation (≈13 min). Verified to build and run on both arches. The Linux client AppImage builds for either arch via `scripts/build-client-linux.sh --arch amd64|arm64` (host default): amd64 takes the upstream `build-client` stage; arm64 takes the new `build-client-kali` stage (§6.4) — kali-rolling provides distro Qt 6.10.2 since aqtinstall has no aarch64 Qt binaries. macOS client targets **arm64 only**.
+Host: macOS Apple Silicon (arm64). The server image builds for the **host architecture by default** — native arm64 builds on Apple Silicon (≈6 min), or set `DOCKER_DEFAULT_PLATFORM=linux/amd64` to force amd64 under QEMU emulation (≈13 min). Verified to build and run on both arches. The Linux client AppImage builds for either arch via `scripts/build-client-linux.sh --arch amd64|arm64` (host default): amd64 takes the upstream `build-client` stage; arm64 takes the new `build-client-kali` stage (§6.5) — kali-rolling provides distro Qt 6.10.2 since aqtinstall has no aarch64 Qt binaries. macOS client targets **arm64 only**.
 
 ## 2. Upstream baselines this was applied against
 
@@ -69,7 +70,7 @@ These are the exact commits the integration was designed for. When re-applying a
 
 | What | Version | Why |
 |---|---|---|
-| Go | **1.25.10** (server image base: `golang:1.25.10-bookworm@sha256:154bd70…`) | Matches `AdaptixC2/AdaptixServer/go.mod` (1.25.x is required). Bumped from 1.25.4 → 1.25.10 to pick up patches for CVE-2025-68121 (TLS session-resumption cert validation, CRITICAL) plus 11 HIGH Go-stdlib CVEs surfaced by the Trivy gate. Newer patch versions within 1.25.x are explicitly fine; bump again when Trivy flags new fixes. Pinned by manifest-list digest (not just tag) for true reproducibility — re-tags of an upstream tag won't silently change our build. |
+| Go | **1.25.12** (server image base: `golang:1.25.12-bookworm@sha256:ea341ba…`) | Matches `AdaptixC2/AdaptixServer/go.mod` (1.25.x is required). Bumped from 1.25.10 → 1.25.12 for CVE-2026-27145, CVE-2026-39822, and CVE-2026-42504 after the Trivy gate found fixed HIGH issues in the compiled standard library. Newer patch versions within 1.25.x are explicitly fine; bump again when Trivy flags new fixes. Pinned by manifest-list digest (not just tag) so re-tags cannot silently change the build. |
 | GOEXPERIMENT | `jsonv2,greenteagc` | Required by upstream Makefile / Dockerfile; preserved in the new Dockerfile as an env default. |
 | go-win7 | HEAD of `Adaptix-Framework/go-win7` | Win7-compatible Go runtime needed by Gopher Agent and consumed by Kharon's beacon. Cloned `--depth=1`. |
 | Qt (Linux client AppImage, amd64) | **6.9.2** (via aqtinstall, from upstream AdaptixC2/Dockerfile `build-client` stage) | Reused as-is from upstream. |
@@ -77,7 +78,7 @@ These are the exact commits the integration was designed for. When re-applying a
 | Qt (macOS client) | Homebrew **qt@6** (currently 6.11.x) | Native arm64; works because of the `if(APPLE)` CMake patch. |
 | Qt (Windows client) | MSYS2 `mingw-w64-x86_64-qt6` | Used by both the native host installer and the Windows-container build. |
 | Debian base (runtime) | **`bookworm-slim@sha256:0104b33…`** | Pinned by manifest-list digest. Re-fetch via `docker buildx imagetools inspect debian:bookworm-slim` when bumping; both digests are also queried by Trivy in CI to surface CVEs that would justify a bump. |
-| Debian base (build) | `bookworm` | Matches upstream (inherited via `golang:1.25.10-bookworm`). |
+| Debian base (build) | `bookworm` | Matches upstream (inherited via `golang:1.25.12-bookworm`). |
 | Ubuntu base (Linux client amd64) | `22.04` | From upstream AdaptixC2/Dockerfile `build-client` stage. |
 | Kali base (Linux client arm64) | `kalilinux/kali-rolling:latest` | Provides arm64 Qt 6.10.2; tracked as a rolling distro since this is the only Qt-6.9+ aarch64 source we have. |
 | Windows base (Windows client container) | `mcr.microsoft.com/windows/servercore:ltsc2022` | Installs MSYS2 inside the container and produces a deployed Windows client without host toolchain installs. Must run under Docker Desktop Windows container mode. |
@@ -93,7 +94,7 @@ These were resolved up-front via `AskUserQuestion`. Repeat them if re-running th
 5. **macOS arch:** Apple Silicon **arm64 only** (no universal binary).
 6. **Linux AppImage delivery:** add a `client-linux` service to the workspace-root `docker-compose.yml`. For amd64 it points at `AdaptixC2/Dockerfile`'s upstream `build-client` stage (Qt 6.9.2 via aqtinstall, ubuntu:22.04). For arm64 it points at a new `build-client-kali` stage added via `patches/adaptixclient-kali-arm64-stage.patch` (Qt 6.10.2 via distro packages on kali-rolling) — aqtinstall publishes no aarch64 Qt binaries. Target swap is driven by `ADAPTIX_CLIENT_TARGET`; defaults preserve the original amd64 path.
 7. **TLS cipher policy:** ECDHE-only suites in `profile.kharon.yaml`. The legacy `TLS_RSA_WITH_AES_*_GCM_*` suites (no forward secrecy) that upstream ships were dropped to enforce PFS.
-8. **Upstream version pinning at build time:** `golang:1.25.10-bookworm` (specific patch, not the floating `1.25`) and `go-win7` pinned via `ARG GO_WIN7_SHA` (currently `15ad42b…`). Bumping is a one-line ARG edit; reproducibility is a first-class requirement. The Go patch version is bumped reactively when Trivy in CI flags a fixed CVE.
+8. **Upstream version pinning at build time:** `golang:1.25.12-bookworm` (specific patch, not the floating `1.25`) and `go-win7` pinned via `ARG GO_WIN7_SHA` (currently `15ad42b…`). A Go bump updates the `FROM` tag and manifest-list digest together; a go-win7 bump is a one-line ARG edit. The Go patch version is bumped reactively when Trivy flags a fixed standard-library CVE.
 
 9. **Windows client container build:** `docker/Dockerfile.windows-client` installs MSYS2 inside a Windows Server Core container and builds the same MinGW64 Qt client without mutating the host. `scripts/build-client-windows-container.ps1` can call Docker Desktop's local `DockerCli.exe -SwitchWindowsEngine` when requested, but the engine switch is global and temporarily disables Linux-container workflows.
 
@@ -105,9 +106,11 @@ These were resolved up-front via `AskUserQuestion`. Repeat them if re-running th
 
 13. **Compose resource bounds:** the runtime service sets `mem_limit: 4g` (override: `ADAPTIX_MEM_LIMIT`), `pids_limit: 4096` (override: `ADAPTIX_PIDS_LIMIT`), and `logging.driver: json-file` with `max-size: 10m` / `max-file: 3` so a runaway plugin or noisy log line can't take down the host. These are operational floors, not security boundaries.
 
-14. **Supply-chain (digest pins + Trivy + SBOM + apt upgrade):** base images pinned by manifest-list digest (`golang:1.25.10-bookworm@sha256:154bd70…`, `debian:bookworm-slim@sha256:0104b33…`). Trivy in CI fails on `CRITICAL`/`HIGH` CVEs with `ignore-unfixed: true`. CycloneDX SBOM uploaded as a per-arch workflow artifact. Runtime stage runs `apt-get upgrade -y` so Debian security patches flow through at build time (the digest pin gives a reproducible starting point; upgrade adds the day's patches).
+14. **Supply-chain (digest pins + Trivy + SBOM + apt upgrade):** base images pinned by manifest-list digest (`golang:1.25.12-bookworm@sha256:ea341ba…`, `debian:bookworm-slim@sha256:0104b33…`). Trivy in CI fails on `CRITICAL`/`HIGH` CVEs with `ignore-unfixed: true`. CycloneDX SBOM uploaded as a per-arch workflow artifact. Runtime stage runs `apt-get upgrade -y` so Debian security patches flow through at build time (the digest pin gives a reproducible starting point; upgrade adds the day's patches).
 
 15. **Fingerprint reduction:** `profile.kharon.yaml` advertises `Server: nginx` instead of `Server: AdaptixC2` and drops the `Adaptix-Version` header entirely. `docker/404page.html` overrides upstream's `<h1>AdaptixC2 404</h1>` body with an nginx-default-shaped page so passive enumeration sees a consistent decoy. CI asserts both via `docker exec | grep`.
+
+16. **Go dependency remediation outside the submodule:** `patches/adaptixserver-go-dependencies.patch` raises fixed `golang.org/x/{crypto,image,net,text}` versions in the primary server module inside the `build-server` container. Applying it before `go work sync` makes those versions the workspace-wide floors for the server and all nine plugins while the pinned AdaptixC2 submodule remains clean.
 
 ## 5. Files added by this workspace
 
@@ -115,19 +118,20 @@ These were resolved up-front via `AskUserQuestion`. Repeat them if re-running th
 
 Multi-stage; build context = workspace root; **builds for the host architecture** (no `--platform` pin on `FROM` lines). Pass `--platform=linux/amd64` to docker build (or set `DOCKER_DEFAULT_PLATFORM`) to force a specific arch — verified working on both arm64 and amd64.
 
-- `base` — `golang:1.25.10-bookworm` (pinned patch version, by manifest-list digest) with `mingw-w64 g++-mingw-w64 gcc g++ make build-essential libssl-dev zlib1g-dev nasm clang llvm python3 git wget ca-certificates`. Clones `Adaptix-Framework/go-win7` into `/usr/lib/go-win7` and `git checkout`s the SHA in `ARG GO_WIN7_SHA` (currently `15ad42b…`) before symlinking runtime headers. Sets `GOEXPERIMENT=jsonv2,greenteagc`.
-- `build-bofs` — `COPY Extension-Kit /src/Extension-Kit && COPY patches /src/patches && git apply /src/patches/extension-kit-nanodump-host-strip.patch`. The patch fixes an upstream nanodump Makefile bug that breaks on non-amd64 hosts (see §6.3). The build is then split into **two stages** so offline builds still succeed:
+- `base` — `golang:1.25.12-bookworm` (pinned patch version, by manifest-list digest) with `mingw-w64 g++-mingw-w64 gcc g++ make build-essential libssl-dev zlib1g-dev nasm clang llvm python3 git wget ca-certificates`. Clones `Adaptix-Framework/go-win7` into `/usr/lib/go-win7` and `git checkout`s the SHA in `ARG GO_WIN7_SHA` (currently `15ad42b…`) before symlinking runtime headers. Sets `GOEXPERIMENT=jsonv2,greenteagc`.
+- `build-bofs` — `COPY Extension-Kit /src/Extension-Kit && COPY patches /src/patches && git apply /src/patches/extension-kit-nanodump-host-strip.patch`. The patch fixes an upstream nanodump Makefile bug that breaks on non-amd64 hosts (see §6.4). The build is then split into **two stages** so offline builds still succeed:
   1. **Strict pass.** Hard-coded list of 9 BOF subdirs (`AD-BOF Creds-BOF Elevation-BOF Execution-BOF Injection-BOF LateralMovement-BOF Postex-BOF Process-BOF SAR-BOF`) built one at a time — any failure stops the build. Update this list when upstream adds a BOF subdir (CI catches drift).
   2. **Best-effort pass.** `make -C /src/Extension-Kit/SAL-BOF || echo …` — SAL-BOF runs `python3 download_vulnerable_driver_list.py` over the network at build time; offline builds (and the CI sandbox if it ever loses network egress) tolerate its failure so the rest of the image still ships.
   Finally `COPY PostEx-Arsenal /src/PostEx-Arsenal && make -C /src/PostEx-Arsenal/bofs`.
 - `build-server`:
   1. `COPY AdaptixC2 /src/AdaptixC2`
-  2. `COPY Kharon/agent_kharon /src/AdaptixC2/AdaptixServer/extenders/agent_kharon`
-  3. `COPY Kharon/listener_kharon_http /src/AdaptixC2/AdaptixServer/extenders/listener_kharon_http`
-  4. `cd /src/AdaptixC2/AdaptixServer && go work use ./extenders/agent_kharon ./extenders/listener_kharon_http && go work sync`
-  5. `make -C /src/AdaptixC2 server-ext` — builds adaptixserver + all 9 extender plugins (Adaptix's Makefile `EXTENDER_DIRS := $(shell find AdaptixServer/extenders -maxdepth 1 -type d ...)` auto-discovers Kharon's two new extenders, no Makefile edit needed).
-  6. `make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon agent` — explicit second-pass compile of the PIC beacon under `src_beacon/`; re-stages the artifacts into the *source* dist/ directory.
-  7. `cp -r /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist/. /src/AdaptixC2/dist/extenders/agent_kharon/` — copies the second-pass artifacts back over the first-pass layout so the runtime image ships the beacon binaries alongside the plugin .so. The two-pass reconciliation is **intentional** (see in-Dockerfile comment) — do not collapse it without verifying the beacon ships.
+  2. `COPY patches /src/patches && git apply /src/patches/adaptixserver-go-dependencies.patch` — raises fixed Go-module floors in the primary workspace module without touching the host submodule.
+  3. `COPY Kharon/agent_kharon /src/AdaptixC2/AdaptixServer/extenders/agent_kharon`
+  4. `COPY Kharon/listener_kharon_http /src/AdaptixC2/AdaptixServer/extenders/listener_kharon_http`
+  5. `cd /src/AdaptixC2/AdaptixServer && go work use ./extenders/agent_kharon ./extenders/listener_kharon_http && go work sync`
+  6. `make -C /src/AdaptixC2 server-ext` — builds adaptixserver + all 9 extender plugins (Adaptix's Makefile `EXTENDER_DIRS := $(shell find AdaptixServer/extenders -maxdepth 1 -type d ...)` auto-discovers Kharon's two new extenders, no Makefile edit needed).
+  7. `make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon agent` — explicit second-pass compile of the PIC beacon under `src_beacon/`; re-stages the artifacts into the *source* dist/ directory.
+  8. `cp -r /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist/. /src/AdaptixC2/dist/extenders/agent_kharon/` — copies the second-pass artifacts back over the first-pass layout so the runtime image ships the beacon binaries alongside the plugin .so. The two-pass reconciliation is **intentional** (see in-Dockerfile comment) — do not collapse it without verifying the beacon ships.
 - `runtime` — minimal `debian:bookworm-slim` (pinned by manifest-list digest) with `apt-get upgrade -y` to pick up Debian security patches that were issued after the pinned base was published, then `apt-get install -y --no-install-recommends ca-certificates openssl curl gosu libcap2-bin` (`curl` for HEALTHCHECK, `gosu` for the entrypoint's privilege drop, `libcap2-bin` for the one-shot `setcap`). The digest-pin-plus-upgrade pairing means the *starting point* is reproducible but security patches available on build day flow through; Trivy in CI tells us when a patch is missing. Creates a system user `adaptix` (UID/GID 10001, `--no-create-home`, `--shell /usr/sbin/nologin`) under which the server will eventually run. COPYs:
   - `/src/AdaptixC2/dist/` → `/app/` (server, ssl_gen.sh, 404page.html, all 9 extenders)
   - workspace `docker/404page.html` → `/app/404page.html` (**overrides upstream's framework-fingerprint 404 with an nginx-default-shaped page; see §5.9**)
@@ -313,6 +317,7 @@ Build-time patches against submodule trees we don't own. Each is a unified-diff 
 
 | Patch | Target | Applied by |
 |---|---|---|
+| `adaptixserver-go-dependencies.patch` | `AdaptixC2/AdaptixServer/go.{mod,sum}` | `Dockerfile` `build-server` stage (container only) |
 | `adaptixclient-macos-bundle.patch` | `AdaptixC2/AdaptixClient/CMakeLists.txt` | `scripts/build-client-macos.sh` (host, with auto-revert) |
 | `adaptixclient-kali-arm64-stage.patch` | `AdaptixC2/Dockerfile` | `scripts/build-client-linux.sh` (host, with auto-revert) |
 | `extension-kit-nanodump-host-strip.patch` | `Extension-Kit/Creds-BOF/nanodump/Makefile` | `Dockerfile` `build-bofs` stage (container only) |
@@ -435,9 +440,19 @@ These changes are made **inside the Dockerfile** and do not touch the host sourc
 - `AdaptixC2/AdaptixServer/go.work` — `go work use` appends two entries during the build. (`setup_kharon.sh` is the upstream-provided script doing this; we inline the same logic.)
 - `AdaptixC2/AdaptixServer/profile.yaml` — replaced inside the runtime image by the workspace-root `profile.kharon.yaml`, COPYed in as `/app/profile.yaml.tmpl` (a template — see §5.3 and §5.7). The entrypoint renders it to `/app/data/profile.yaml` on first start, substituting in credentials from env vars or random defaults. The host file is no longer bind-mounted at runtime.
 
-These should NOT be committed to a submodule working tree — keep them clean so `git status` in any submodule stays empty between builds. The `patches/` mechanism (§5.5), the `trap`-based revert in `scripts/build-client-macos.sh`, and the in-container `git apply` for §6.3 enforce this; everything else is Dockerfile-side.
+These should NOT be committed to a submodule working tree — keep them clean so `git status` in any submodule stays empty between builds. The `patches/` mechanism (§5.5), the `trap`-based revert in `scripts/build-client-macos.sh`, and the in-container `git apply` steps for §§6.3–6.4 enforce this; everything else is Dockerfile-side.
 
-### 6.3 `Extension-Kit/Creds-BOF/nanodump/Makefile` — host-arch strip fix
+### 6.3 `AdaptixC2/AdaptixServer/go.mod` — fixed Go dependency floors
+
+**Stored as `patches/adaptixserver-go-dependencies.patch`; applied inside the container by the Dockerfile's `build-server` stage before the Kharon modules are copied in and `go work sync` runs. The host submodule tree is never modified.**
+
+The pinned upstream server selects `golang.org/x/crypto v0.48.0`, `golang.org/x/image v0.36.0`, `golang.org/x/net v0.50.0`, and `golang.org/x/text v0.34.0`. Trivy reports fixed HIGH vulnerabilities for those module lines in the compiled server binary. The patch raises them to `v0.53.0`, `v0.43.0`, `v0.56.0`, and `v0.39.0` respectively, together with `x/sys v0.46.0`; these are the versions selected by the full server-and-extender workspace.
+
+The primary server module is the correct patch point: Go's minimal version selection uses those requirements as workspace-wide floors, and the following `go work sync` applies the selected build list to all default and Kharon extender modules before the server and plugins are compiled together. The patch includes only the `go get`-generated `go.mod`/`go.sum` delta, not an unrelated `go mod tidy` cleanup.
+
+When refreshing AdaptixC2, retire this patch if upstream already selects these versions or newer fixed releases. Otherwise regenerate it with the current pinned Go toolchain, check it with `git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch`, and keep the submodule manifests restored outside the container build.
+
+### 6.4 `Extension-Kit/Creds-BOF/nanodump/Makefile` — host-arch strip fix
 
 **Stored as `patches/extension-kit-nanodump-host-strip.patch`; applied inside the container by the Dockerfile's `build-bofs` stage. The host submodule tree is never modified.** The patch deletes one redundant line from upstream nanodump's Makefile:
 
@@ -450,7 +465,7 @@ These should NOT be committed to a submodule working tree — keep them clean so
 
 Worth pushing upstream as a one-line PR; until then, this patch keeps cross-arch builds working.
 
-### 6.4 `AdaptixC2/Dockerfile` — Kali-rolling arm64 client stage
+### 6.5 `AdaptixC2/Dockerfile` — Kali-rolling arm64 client stage
 
 **Stored as `patches/adaptixclient-kali-arm64-stage.patch`; applied by `scripts/build-client-linux.sh` on the host with auto-revert via `trap`, so the submodule tree stays clean between builds.** The patch appends a new `build-client-kali` stage to `AdaptixC2/Dockerfile` — purely additive, the upstream `build-client` stage is unchanged.
 
@@ -572,7 +587,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-client-windows-container.
 8. **Build context.** The unified `Dockerfile` requires the workspace root as build context (it COPYs all four sibling repos). The `client-linux` service uses `./AdaptixC2` as its context because it consumes only `AdaptixC2/Dockerfile`'s `build-client` stage.
 9. **Host-native by default; arm64 first-class.** The unified Dockerfile no longer pins `--platform=linux/amd64`. On Apple Silicon you get a native arm64 image (≈6 min); on amd64 hosts you get amd64. The Windows artifacts in the image (beacon agent C++, Kharon beacon, Gopher agent) are still cross-compiled to PE x86/x64 regardless of host arch via mingw-w64 / clang. To force amd64 from an arm64 host, set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (uses QEMU; ≈13 min) — required if you need to deploy the resulting image to an x86_64 server. On a Linux arm64 host, ensure `qemu-user-static` is registered (`docker run --rm --privileged tonistiigi/binfmt --install all`) before forcing amd64.
 10. **Submodule .git pointer files break in-container `git apply`.** Each submodule on the host has a `.git` *file* containing `gitdir: ../.git/modules/<name>`. Without the workspace-root `.dockerignore`, Docker COPYs that file into the build container, where the path it references doesn't exist — and `git apply` then fails before reading the patch. The `.dockerignore`'s `**/.git` and `**/.gitmodules` lines are load-bearing.
-11. **nanodump host-strip bug surfaces only on non-amd64 hosts.** Upstream's nanodump Makefile strips a host-built ELF binary using `x86_64-w64-mingw32-strip` (a Windows cross-strip). On amd64 the cross-strip silently accepts x86_64 ELF; on arm64 it rejects aarch64 ELF and the build dies. Patched out by `patches/extension-kit-nanodump-host-strip.patch`; the strip was redundant anyway (gcc `-s` already strips). See §6.3.
+11. **nanodump host-strip bug surfaces only on non-amd64 hosts.** Upstream's nanodump Makefile strips a host-built ELF binary using `x86_64-w64-mingw32-strip` (a Windows cross-strip). On amd64 the cross-strip silently accepts x86_64 ELF; on arm64 it rejects aarch64 ELF and the build dies. Patched out by `patches/extension-kit-nanodump-host-strip.patch`; the strip was redundant anyway (gcc `-s` already strips). See §6.4.
 12. **Profile is rendered once, then frozen.** The entrypoint only renders `/app/data/profile.yaml` if it does not already exist. Editing the workspace `profile.kharon.yaml` after first start changes nothing in the running container — the template was already consumed. To change ports, extenders, axscripts, or anything else from the template after first start: edit `data/profile.yaml` directly and `restart`, or `rm data/profile.yaml` and let the entrypoint re-render (and re-generate credentials if env vars aren't set). The split exists so credentials persist across restarts and you can override extenders/axscripts post-deploy without rebuilding the image.
 13. **Credentials in `data/credentials.txt` are the *only* place random passwords are recorded.** The entrypoint deliberately does NOT echo the password to stdout, so `docker logs` can't be used to recover a lost credential (an intentional choice — Docker captures stdout indefinitely, which would survive an in-place rotation and let any future `docker logs` reader pull historic credentials). The file is `chmod 600`. Treat it like an SSH key: don't commit `./data/`, don't email it. If you lose it and didn't set `ADAPTIX_*` env vars, the only recovery is to read the rendered `data/profile.yaml` (or wipe `data/` and start over).
 14. **HEALTHCHECK omits `-f` intentionally.** `/endpoint` is a WebSocket upgrade and returns a non-2xx status on a plain GET, so `curl -f` would mark a healthy server as unhealthy. We only care that the server responded *at all* (TCP+TLS+HTTP), so the check uses `curl -sk -o /dev/null` and trusts the exit code (non-zero only on connect/TLS/timeout failure). If a future upstream change makes `/endpoint` 2xx on GET, switching to `-fsk` is a strict improvement.
@@ -585,12 +600,14 @@ When refreshing against newer upstreams:
 0. **Bump submodule pins.** Per submodule:
    ```bash
    cd AdaptixC2 && git fetch origin && git checkout <new-tag-or-sha> && cd ..
-   git -C AdaptixC2 apply --check patches/adaptixclient-macos-bundle.patch  # confirm patch still applies
+   git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch
+   git -C AdaptixC2 apply --check ../patches/adaptixclient-macos-bundle.patch
    git add AdaptixC2 && git commit -m "Bump AdaptixC2 to <tag>"
    ```
    If `git apply --check` fails, jump to step 2 to refresh the patch before committing the bump. Repeat for `Extension-Kit`, `Kharon`, `PostEx-Arsenal`. Update §2 baselines in the same commit (or a follow-up).
 1. **`git pull` each subrepo** to a known good tag/commit. Update §2 baselines. *(Subsumed by step 0 above for the submodule case; left here for the non-submodule fallback.)*
 2. **Diff-check the patch sites:**
+   - `AdaptixC2/AdaptixServer/go.mod` + `go.sum` (patch: `adaptixserver-go-dependencies.patch`). If upstream now selects the same or newer fixed module versions, retire the patch. Otherwise regenerate the minimal `go get` delta with the pinned Go toolchain, capture only the manifest/checksum changes, restore the submodule files, and verify with `git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch`.
    - `AdaptixC2/AdaptixClient/CMakeLists.txt` (patch: `adaptixclient-macos-bundle.patch`). Find `add_executable(AdaptixClient …)`. If upstream now adds `MACOSX_BUNDLE` or sets bundle props themselves, retire the patch and harmonize. Otherwise re-apply manually, fix any rejected hunks, and regenerate: `git -C AdaptixC2 diff -- AdaptixClient/CMakeLists.txt > patches/adaptixclient-macos-bundle.patch`. Bump `MACOSX_BUNDLE_BUNDLE_VERSION` inside the patch to match the new release tag.
    - `Extension-Kit/Creds-BOF/nanodump/Makefile` (patch: `extension-kit-nanodump-host-strip.patch`). If upstream has fixed the redundant `STRIP_x64 scripts/restore_signature` line themselves (or refactored that target), retire the patch. Otherwise re-apply manually and regenerate: `git -C Extension-Kit diff -- Creds-BOF/nanodump/Makefile > patches/extension-kit-nanodump-host-strip.patch`. Worth checking whether the upstream PR has been merged before re-applying.
 3. **Diff-check `AdaptixC2/AdaptixServer/profile.yaml`** vs `profile.kharon.yaml`. If upstream added new HttpServer fields or a new default extender, mirror those into `profile.kharon.yaml` while keeping:
@@ -878,7 +895,7 @@ Total wall time: about **7–8 minutes** for both arches together (the two matri
 
 `ubuntu-24.04-arm` is a real arm64 runner — no QEMU emulation. This is the only place the arm64 path gets exercised on a known-clean machine, so it catches:
 
-- The nanodump host-strip bug on arm64 hosts (the symptom the §6.3 patch was written for — if the patch ever stops applying, CI fails here first).
+- The nanodump host-strip bug on arm64 hosts (the symptom the §6.4 patch was written for — if the patch ever stops applying, CI fails here first).
 - Anything Kharon's `clang -target x86_64-w64-mingw32` does that's host-arch-sensitive.
 - Subtle differences in how `mingw-w64` packages behave between Debian arm64 and amd64 repos.
 
@@ -898,7 +915,7 @@ The most common failure modes, in order of historical likelihood:
 2. **A new BOF subdir appears in `Extension-Kit/` that's not in the strict list in `Dockerfile`'s `build-bofs` stage.** Add it to the list, or move it to the best-effort pass if it has network deps.
 3. **Smoke health-check never reports healthy.** Usually means the server crashed at startup — check the `docker logs` dump CI prints on timeout. Common cause: an upstream profile-schema change that broke the entrypoint's `sed` substitutions.
 4. **arm64 job times out while amd64 passes.** The 45-minute job timeout is generous, but the first build on a runner has no buildx layer cache. If this becomes chronic, add a `actions/cache` step keyed on submodule SHAs to persist intermediate layers.
-5. **Trivy scan fails with a new HIGH/CRITICAL CVE.** A fix has shipped upstream (otherwise `ignore-unfixed` would suppress it). Either bump the pinned base-image digest in `Dockerfile` (`docker buildx imagetools inspect <ref>` to get the new digest, then update both the digest and the comment in §3), or — if the CVE is in a Debian package installed in our `apt-get install` line — re-run the build (apt fetches latest by default, so the next layer rebuild picks up the patched package). Document the bump in the commit message.
+5. **Trivy scan fails with a new HIGH/CRITICAL CVE.** A fix has shipped upstream (otherwise `ignore-unfixed` would suppress it). If the finding is in the Go standard library, bump the pinned Go patch tag and manifest-list digest together (`docker buildx imagetools inspect <ref>`). If it is in a Go module embedded in `adaptixserver`, update or regenerate `patches/adaptixserver-go-dependencies.patch`. If it is in a Debian package, re-run the build so `apt-get upgrade` fetches the patched package, bumping the runtime digest when the base itself needs refreshing. Document the affected and fixed versions in the commit message.
 
 ---
 

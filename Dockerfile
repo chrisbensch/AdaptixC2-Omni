@@ -14,7 +14,7 @@
 # ============================================
 # Pinned by digest, not just tag. Tags are mutable; digests aren't. Bump alongside
 # the version when refreshing — see BLUEPRINT.md §3 for the lookup procedure.
-FROM golang:1.25.10-bookworm@sha256:154bd7001b6eb339e88c964442c0ad6ed5e53f09844cc818a41ce4ecb3ce3b43 AS base
+FROM golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GOEXPERIMENT=jsonv2,greenteagc
@@ -90,6 +90,11 @@ RUN make -C /src/PostEx-Arsenal/bofs
 FROM base AS build-server
 
 COPY AdaptixC2 /src/AdaptixC2
+COPY patches /src/patches
+# Raise fixed Go-module floors in the workspace primary module before Kharon is
+# registered and `go work sync` propagates the selected versions to every plugin.
+RUN cd /src/AdaptixC2 && \
+    git apply --verbose /src/patches/adaptixserver-go-dependencies.patch
 
 # Inline what Kharon/setup_kharon.sh does (without --ax indirection):
 # drop the agent + listener extender directories into AdaptixServer/extenders/,
