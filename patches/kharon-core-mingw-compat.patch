@@ -1,0 +1,24 @@
+From: Omni build harness
+Subject: Guard PROCESS_MITIGATION types not present in Bookworm's mingw-w64 12.2
+
+PROCESS_MITIGATION_USER_POINTER_AUTH_POLICY and PROCESS_MITIGATION_SEHOP_POLICY
+were added to the Windows SDK after the version shipped in Debian Bookworm's
+mingw-w64 (12.2.0). These members of PROCESS_MITIGATION_POLICY_INFORMATION
+are never referenced by any Kharon BOF — guard them so the core BOF modules
+compile on Bookworm toolchain.
+
+--- a/agent_kharon/src_core/include/win32.h
++++ b/agent_kharon/src_core/include/win32.h
+@@ -169,8 +169,12 @@ typedef struct _PROCESS_MITIGATION_POLICY_INFORMATION {
+         PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY SideChannelIsolationPolicy;
+         PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY UserShadowStackPolicy;
+         PROCESS_MITIGATION_REDIRECTION_TRUST_POLICY RedirectionTrustPolicy;
++#ifdef PROCESS_MITIGATION_USER_POINTER_AUTH_POLICY
+         PROCESS_MITIGATION_USER_POINTER_AUTH_POLICY UserPointerAuthPolicy;
++#endif
++#ifdef PROCESS_MITIGATION_SEHOP_POLICY
+         PROCESS_MITIGATION_SEHOP_POLICY SEHOPPolicy;
++#endif
+         PROCESS_MITIGATION_ACTIVATION_CONTEXT_TRUST_POLICY2 ActivationContextTrustPolicy;
+     };
+ } PROCESS_MITIGATION_POLICY_INFORMATION, *PPROCESS_MITIGATION_POLICY_INFORMATION;

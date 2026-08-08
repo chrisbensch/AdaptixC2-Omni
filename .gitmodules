@@ -10,3 +10,6 @@
 [submodule "PostEx-Arsenal"]
 	path = PostEx-Arsenal
 	url = https://github.com/entropy-z/PostEx-Arsenal
+[submodule "NaX"]
+	path = NaX
+	url = https://github.com/MaorSabag/NaX

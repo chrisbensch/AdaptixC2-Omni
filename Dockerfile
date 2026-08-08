@@ -102,8 +102,36 @@ RUN cd /src/AdaptixC2 && \
 COPY Kharon/agent_kharon         /src/AdaptixC2/AdaptixServer/extenders/agent_kharon
 COPY Kharon/listener_kharon_http /src/AdaptixC2/AdaptixServer/extenders/listener_kharon_http
 
+# Inline what NaX/setup_nax.sh does: drop the 4 server modules into
+# AdaptixServer/extenders/ alongside Kharon. Unlike Kharon, these modules
+# don't have per-directory Makefiles compatible with `make extenders`, so
+# we build them separately after `make server-ext`. They DO join go.work
+# so the Go toolchain resolves their module paths.
+COPY NaX/src_server/agent_nonameax          /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax
+COPY NaX/src_server/listener_nonameax_http  /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_http
+COPY NaX/src_server/listener_nonameax_smb   /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_smb
+COPY NaX/src_server/service_nax_store       /src/AdaptixC2/AdaptixServer/extenders/service_nax_store
+
+# NaX module Makefiles deploy to ../../../Server/extenders/ (the upstream
+# convention) and don't produce a local dist/ directory. Remove them so
+# `make extenders` skips these directories — we build NaX plugins separately.
+RUN rm -f /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax/Makefile \
+          /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_http/Makefile \
+          /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_smb/Makefile \
+          /src/AdaptixC2/AdaptixServer/extenders/service_nax_store/Makefile
+
+# Apply Kharon BOF mingw-w64 Bookworm compatibility patch. The
+# PROCESS_MITIGATION_USER_POINTER_AUTH_POLICY and SEHOP_POLICY types
+# don't exist in Bookworm's mingw-w64 12.2 — guard them so the core
+# BOF modules compile. Use `patch` (not `git apply`) because the .git
+# directory is excluded from the build context.
+RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
+    patch -p2 --verbose < /src/patches/kharon-core-mingw-compat.patch
+
 RUN cd /src/AdaptixC2/AdaptixServer && \
-    go work use ./extenders/agent_kharon ./extenders/listener_kharon_http && \
+    go work use ./extenders/agent_kharon ./extenders/listener_kharon_http \
+                ./extenders/agent_nonameax ./extenders/listener_nonameax_http \
+                ./extenders/listener_nonameax_smb ./extenders/service_nax_store && \
     go work sync
 
 # Build adaptixserver + every extender plugin (default 7 + Kharon 2 = 9).
@@ -113,6 +141,11 @@ RUN make -C /src/AdaptixC2 server-ext
 # this target compiles the PIC beacon source under src_beacon/ and stages it into the
 # extender's dist/ for runtime payload generation.
 RUN make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon agent
+
+# Build the Kharon core BOF modules. These are precompiled .x64.o files
+# loaded by LoadExtModule() at command execution time (ps list, ls, etc.).
+# They're invariant across deployments — no per-payload Config.cc here.
+RUN make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_core
 
 # Two-pass dist reconciliation (intentional — do not collapse without verifying):
 #   - `make server-ext` (above) builds the Go plugin and moves the extender's
@@ -125,6 +158,54 @@ RUN if [ -d /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist ]; then \
         cp -r /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist/. \
               /src/AdaptixC2/dist/extenders/agent_kharon/; \
     fi
+
+# ============================================
+# NaX — 4 Go extender plugins + full source tree
+# ============================================
+# NaX modules don't have per-directory Makefiles compatible with
+# `make extenders` (they expect SERVER_DIR via src_server/Makefile),
+# so we build them explicitly here. The full NaX source tree is copied
+# to /src/NaX/ so the runtime agent can find it via resolveNaxRoot()
+# (fallback: ModuleDir/../../../NaX = /app/NaX).
+
+COPY NaX /src/NaX
+
+# Build each NaX plugin. Output goes directly to dist/extenders/<name>/.
+RUN set -eux; \
+    mkdir -p /src/AdaptixC2/dist/extenders/agent_nonameax && \
+    cd /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax && \
+    GOEXPERIMENT=jsonv2,greenteagc go build -buildmode=plugin -ldflags="-s -w" \
+        -o /src/AdaptixC2/dist/extenders/agent_nonameax/agent_nonameax.so . && \
+    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/agent_nonameax/
+
+RUN set -eux; \
+    mkdir -p /src/AdaptixC2/dist/extenders/listener_nonameax_http && \
+    cd /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_http && \
+    GOEXPERIMENT=jsonv2,greenteagc go build -buildmode=plugin -ldflags="-s -w" \
+        -o /src/AdaptixC2/dist/extenders/listener_nonameax_http/listener_nonameax_http.so . && \
+    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/listener_nonameax_http/
+
+RUN set -eux; \
+    mkdir -p /src/AdaptixC2/dist/extenders/listener_nonameax_smb && \
+    cd /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_smb && \
+    GOEXPERIMENT=jsonv2,greenteagc go build -buildmode=plugin -ldflags="-s -w" \
+        -o /src/AdaptixC2/dist/extenders/listener_nonameax_smb/listener_nonameax_smb.so . && \
+    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/listener_nonameax_smb/
+
+RUN set -eux; \
+    mkdir -p /src/AdaptixC2/dist/extenders/service_nax_store && \
+    cd /src/AdaptixC2/AdaptixServer/extenders/service_nax_store && \
+    GOEXPERIMENT=jsonv2,greenteagc go build -buildmode=plugin -ldflags="-s -w" \
+        -o /src/AdaptixC2/dist/extenders/service_nax_store/nax_store.so . && \
+    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/service_nax_store/
+
+# Prebuild the NaX beacon + loader object files (invariant across
+# deployments — only Config.c changes per build). This makes the
+# runtime `make link-components` fast (seconds instead of minutes).
+# Uses the same toolchain that will be available at runtime.
+RUN cd /src/NaX && \
+    make components NAX_STOMP_MODE=1 NAX_EXEC_MODE=1 \
+    || echo "[!] NaX prebuild had warnings (non-fatal)"
 
 # ============================================
 # Stage: runtime — minimal server image
@@ -142,6 +223,13 @@ RUN apt-get update && \
         curl \
         gosu \
         libcap2-bin \
+        clang \
+        nasm \
+        make \
+        binutils \
+        g++-mingw-w64-x86-64 \
+        g++-mingw-w64-i686 \
+        python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # `apt-get upgrade -y` above pulls Debian security updates into the base
@@ -176,6 +264,28 @@ COPY docker/404page.html /app/404page.html
 # extension-kit.axs uses ax.script_dir() + "<Subdir>/<name>.axs"
 COPY --from=build-bofs /src/Extension-Kit  /app/Extension-Kit
 COPY --from=build-bofs /src/PostEx-Arsenal /app/PostEx-Arsenal
+
+# Kharon runtime compilation source trees. AgentGenerateBuild compiles
+# Config.cc + links the beacon at runtime with per-deployment defines,
+# compiles loader wrappers (Exe/Dll/Svc) via clang++, and loads precompiled
+# BOF modules (src_core/dist/*.x64.o) at command execution time.
+# The build-server stage already precompiled the invariant .o files in
+# src_beacon/Bin/obj/ and src_core/dist/ — these come along with the COPY.
+COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_beacon \
+     /app/extenders/agent_kharon/src_beacon
+COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_loader \
+     /app/extenders/agent_kharon/src_loader
+COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_core   \
+     /app/extenders/agent_kharon/src_core
+
+# NaX runtime compilation source tree. BuildPayload generates Config.h
+# headers, runs `make -C /app/NaX link-components` (with prebuilt .o files
+# from the build-server prebuild), packs payloads in-process via nax_packer.go,
+# and optionally compiles PE wrappers (Exe/Dll/Svc) via x86_64-w64-mingw32-g++.
+# resolveNaxRoot() falls back to ModuleDir/../../../NaX = /app/NaX.
+COPY --from=build-server /src/NaX /app/NaX
+RUN chown -R adaptix:adaptix /app/NaX
+RUN chown -R adaptix:adaptix /app/extenders
 
 # Profile template + Kharon listener template. The runtime profile is rendered
 # from profile.yaml.tmpl into /app/data/profile.yaml on first start, with
