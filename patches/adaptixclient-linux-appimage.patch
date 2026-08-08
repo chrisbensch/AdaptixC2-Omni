@@ -1,0 +1,170 @@
+Updates both Linux client build paths to package with the modern
+AppImage/appimagetool project and adds the Kali-based arm64 stage.
+
+The upstream amd64 stage used the obsolete AppImageKit appimagetool runtime
+5735cc5, which requires libfuse.so.2 at launch. The replacement appimagetool
+continuous assets are checksum-locked to commit 8c8c91f. Packaging also uses
+an explicit, checksum-locked type-2 runtime from dated release 20251108, so
+appimagetool cannot silently download a different runtime.
+
+The build-client-kali stage exists because aqtinstall publishes no Linux
+aarch64 Qt binaries through 6.11.x. It uses Kali rolling's distro Qt6 plus
+linuxdeploy and linuxdeploy-plugin-qt. All AppImage-hosted build tools are
+extracted before use, so the build container itself does not require FUSE.
+
+diff --git a/Dockerfile b/Dockerfile
+index 1cdff70..33eb2be 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -63,13 +63,29 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
+
+ ENV PATH="/usr/local/bin:/opt/qt/${QT_VERSION}/gcc_64/bin:$PATH"
+
+-# Install linuxdeployqt and appimagetool
++# Install linuxdeployqt and the modern appimagetool. The appimagetool project
++# publishes only a moving continuous asset, so its checksum locks this build to
++# commit 8c8c91f until the pin is deliberately refreshed. Supplying the dated
++# type-2 runtime explicitly prevents appimagetool from downloading a floating
++# runtime while packaging.
++ARG APPIMAGETOOL_SHA256=a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
++ARG TYPE2_RUNTIME_VERSION=20251108
++ARG TYPE2_RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+ RUN wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage \
+     -O /usr/local/bin/linuxdeployqt && \
+     chmod +x /usr/local/bin/linuxdeployqt && \
+-    wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+-    -O /usr/local/bin/appimagetool && \
+-    chmod +x /usr/local/bin/appimagetool
++    mkdir -p /tmp/appimagetool && cd /tmp/appimagetool && \
++    wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
++        -O appimagetool.AppImage && \
++    echo "${APPIMAGETOOL_SHA256}  appimagetool.AppImage" | sha256sum -c - && \
++    chmod +x appimagetool.AppImage && \
++    ./appimagetool.AppImage --appimage-extract >/dev/null && \
++    mv squashfs-root /opt/appimagetool && \
++    ln -sf /opt/appimagetool/AppRun /usr/local/bin/appimagetool && \
++    wget -q "https://github.com/AppImage/type2-runtime/releases/download/${TYPE2_RUNTIME_VERSION}/runtime-x86_64" \
++        -O /opt/appimagetool/runtime-x86_64 && \
++    echo "${TYPE2_RUNTIME_SHA256}  /opt/appimagetool/runtime-x86_64" | sha256sum -c - && \
++    cd / && rm -rf /tmp/appimagetool
+
+ # Install CMake 3.31.6
+ RUN wget -qO- "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz" | \
+@@ -116,11 +132,114 @@ RUN cd /client-dist && \
+         -bundle-non-qt-libs \
+         -no-translations && \
+     rm -rf squashfs-root && \
+-    /usr/local/bin/appimagetool --appimage-extract && \
+-    ARCH=x86_64 ./squashfs-root/AppRun AdaptixClient.AppDir AdaptixClient-x86_64.AppImage && \
+-    rm -rf squashfs-root
++    ARCH=x86_64 /usr/local/bin/appimagetool \
++        --runtime-file /opt/appimagetool/runtime-x86_64 \
++        AdaptixClient.AppDir AdaptixClient-x86_64.AppImage
+
++# ============================================
++# Stage: build-client-kali (Qt client via kalilinux/kali-rolling distro Qt6)
++# ============================================
++# Used by the arm64 client build because aqtinstall publishes no Linux
++# aarch64 Qt binaries for any version through 6.11.x. Kali rolling ships
++# Qt 6.10.2 for both amd64 and arm64, which is API-compatible with the 6.9.2
++# the original stage targets (AdaptixClient pins no minor minimum).
++FROM kalilinux/kali-rolling:latest AS build-client-kali
++
++ENV DEBIAN_FRONTEND=noninteractive
++
++# IMG_ARCH drives the AppImage filename and tool download architecture.
++# This stage is the arm64 path; amd64 uses the upstream build-client stage.
++ARG IMG_ARCH=aarch64
++
++# appimagetool's moving continuous asset is checksum-locked to commit 8c8c91f.
++# The dated runtime is downloaded and passed explicitly so the embedded runtime
++# cannot change without an intentional version/checksum update.
++ARG APPIMAGETOOL_SHA256=1b00524ba8c6b678dc15ef88a5c25ec24def36cdfc7e3abb32ddcd068e8007fe
++ARG TYPE2_RUNTIME_VERSION=20251108
++ARG TYPE2_RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
++
++RUN apt-get update && apt-get install -y --no-install-recommends \
++    build-essential \
++    ca-certificates \
++    cmake \
++    git \
++    qt6-base-dev \
++    qt6-base-dev-tools \
++    qt6-base-private-dev \
++    qt6-websockets-dev \
++    qt6-networkauth-dev \
++    qt6-svg-dev \
++    qt6-svg-plugins \
++    qt6-declarative-dev \
++    qmake6 \
++    libqt6sql6-sqlite \
++    libgl-dev \
++    libegl-dev \
++    libxkbcommon-dev \
++    libxkbcommon-x11-0 \
++    libxcb-cursor0 \
++    libxcb-icccm4 \
++    libxcb-image0 \
++    libxcb-keysyms1 \
++    libxcb-randr0 \
++    libxcb-render-util0 \
++    libxcb-shape0 \
++    libxcb-xfixes0 \
++    libxcb-xinerama0 \
++    libxcb-xkb1 \
++    libxcb1-dev \
++    libfontconfig1-dev \
++    libfreetype-dev \
++    libssl-dev \
++    libdbus-1-dev \
++    libsqlite3-dev \
++    wget \
++    file \
++    && rm -rf /var/lib/apt/lists/*
++
++# linuxdeploy + linuxdeploy-plugin-qt + appimagetool. All three are AppImages;
++# extract on install so the build step doesn't need FUSE (Kali has no libfuse2).
++RUN mkdir -p /tmp/ldd && cd /tmp/ldd && \
++    for tool in linuxdeploy linuxdeploy-plugin-qt; do \
++        url="https://github.com/linuxdeploy/${tool}/releases/download/continuous/${tool}-${IMG_ARCH}.AppImage"; \
++        wget -q "$url" -O "${tool}.AppImage" && chmod +x "${tool}.AppImage" && \
++        "./${tool}.AppImage" --appimage-extract >/dev/null && \
++        mv squashfs-root "/opt/${tool}" && \
++        ln -sf "/opt/${tool}/AppRun" "/usr/local/bin/${tool}"; \
++    done && \
++    wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${IMG_ARCH}.AppImage" \
++        -O appimagetool.AppImage && chmod +x appimagetool.AppImage && \
++    echo "${APPIMAGETOOL_SHA256}  appimagetool.AppImage" | sha256sum -c - && \
++    ./appimagetool.AppImage --appimage-extract >/dev/null && \
++    mv squashfs-root /opt/appimagetool && \
++    ln -sf /opt/appimagetool/AppRun /usr/local/bin/appimagetool && \
++    wget -q "https://github.com/AppImage/type2-runtime/releases/download/${TYPE2_RUNTIME_VERSION}/runtime-${IMG_ARCH}" \
++        -O "/opt/appimagetool/runtime-${IMG_ARCH}" && \
++    echo "${TYPE2_RUNTIME_SHA256}  /opt/appimagetool/runtime-${IMG_ARCH}" | sha256sum -c - && \
++    cd / && rm -rf /tmp/ldd
++
++WORKDIR /src
++COPY ./AdaptixClient /src
+
++RUN cmake -B build -DCMAKE_BUILD_TYPE=Release && \
++    cmake --build build -j$(nproc)
++
++RUN mkdir -p /client-dist/AdaptixClient.AppDir/usr/bin && \
++    mkdir -p /client-dist/AdaptixClient.AppDir/usr/share/applications && \
++    mkdir -p /client-dist/AdaptixClient.AppDir/usr/share/icons/hicolor/256x256/apps && \
++    cp build/AdaptixClient /client-dist/AdaptixClient.AppDir/usr/bin/ && \
++    cp Resources/Logo.png /client-dist/AdaptixClient.AppDir/usr/share/icons/hicolor/256x256/apps/AdaptixClient.png && \
++    printf '[Desktop Entry]\nType=Application\nName=Adaptix Client\nExec=AdaptixClient\nIcon=AdaptixClient\nCategories=Network;Security;\nTerminal=false\n' \
++        > /client-dist/AdaptixClient.AppDir/usr/share/applications/AdaptixClient.desktop && \
++    ln -sf usr/bin/AdaptixClient /client-dist/AdaptixClient.AppDir/AppRun && \
++    ln -sf usr/share/icons/hicolor/256x256/apps/AdaptixClient.png /client-dist/AdaptixClient.AppDir/AdaptixClient.png && \
++    ln -sf usr/share/applications/AdaptixClient.desktop /client-dist/AdaptixClient.AppDir/AdaptixClient.desktop
++
++RUN cd /client-dist && \
++    QMAKE=/usr/bin/qmake6 /usr/local/bin/linuxdeploy --appdir AdaptixClient.AppDir --plugin qt && \
++    ARCH="${IMG_ARCH}" /usr/local/bin/appimagetool \
++        --runtime-file "/opt/appimagetool/runtime-${IMG_ARCH}" \
++        AdaptixClient.AppDir "AdaptixClient-${IMG_ARCH}.AppImage"
+
+ # ============================================
+ # Stage: build-server (server only)

@@ -72,9 +72,9 @@ services:
   #   arm64 → build-client-kali  (kali-rolling + distro Qt 6.10.2 + linuxdeploy)
   # The arm64 path exists because aqtinstall publishes no Linux aarch64 Qt
   # binaries; Kali's distro Qt6 fills the gap. The kali stage is added by
-  # patches/adaptixclient-kali-arm64-stage.patch (applied by scripts/build-client-linux.sh).
-  # Defaults reproduce the original amd64 path; scripts/build-client-linux.sh sets the
-  # ADAPTIX_CLIENT_* env vars when --arch arm64 is requested.
+  # patches/adaptixclient-linux-appimage.patch, which also replaces the obsolete
+  # amd64 AppImageKit packaging runtime. scripts/build-client-linux.sh sets the
+  # ADAPTIX_CLIENT_* variables for the selected architecture and host ownership.
   client-linux:
     profiles: ["build-client"]
     platform: ${ADAPTIX_CLIENT_PLATFORM:-linux/amd64}
@@ -88,6 +88,9 @@ services:
         IMG_ARCH: ${ADAPTIX_CLIENT_IMG_ARCH:-x86_64}
     image: adaptixc2-omni-client-linux-builder:${ADAPTIX_CLIENT_ARCH:-amd64}
     container_name: adaptixc2-omni-client-linux-builder-${ADAPTIX_CLIENT_ARCH:-amd64}
+    # The image build runs as root, but this one-shot copy container uses the
+    # invoking host identity so bind-mounted AppImages are not root-owned.
+    user: "${ADAPTIX_CLIENT_HOST_UID:-1000}:${ADAPTIX_CLIENT_HOST_GID:-1000}"
     volumes:
       - ./AdaptixClient-dist:/client-dist-output
     command: sh -c "cp -r /client-dist/. /client-dist-output/"

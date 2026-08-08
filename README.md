@@ -28,7 +28,7 @@ A single `docker compose build` produces a runtime image containing:
 
 Plus separate workflows for the GUI clients:
 
-- **Linux AppImage** (x86_64) built inside a Docker container — reuses the upstream `build-client` Dockerfile stage, no duplication.
+- **Linux AppImage** (amd64 or arm64) built inside Docker with a checksum-locked modern AppImage type-2 runtime; output files retain the invoking host UID/GID.
 - **macOS .app bundle** (Apple Silicon / arm64) built natively via Homebrew Qt, with portable RPATHs and ad-hoc signing — Adaptix does not ship an official macOS build.
 - **Windows exe** (x86_64) built natively on a Windows machine using MSYS2 + MinGW64; `scripts/install-prereqs-windows.ps1` automates the prerequisite setup.
 
@@ -105,7 +105,7 @@ The server runs as an unprivileged user (UID/GID 10001, `adaptix`) inside the co
 # → AdaptixClient-dist/AdaptixClient-{x86_64,aarch64}.AppImage
 ```
 
-amd64 builds use the upstream `build-client` Dockerfile stage as-is. arm64 builds use a new `build-client-kali` stage (added by `patches/adaptixclient-kali-arm64-stage.patch`, auto-reverted on script exit) — aqtinstall has no aarch64 Qt binaries through 6.11.x, so Kali's distro Qt6 fills the gap.
+The helper temporarily applies `patches/adaptixclient-linux-appimage.patch` and automatically reverts it on exit; use it rather than raw Compose client commands, which do not apply workspace-owned patches. The patch replaces the obsolete AppImageKit packager in the upstream amd64 stage and adds the `build-client-kali` arm64 stage; aqtinstall has no aarch64 Qt binaries through 6.11.x, so Kali's distro Qt6 fills that gap. Both outputs embed the modern statically linked type-2 runtime and run directly on current FUSE-3-only Kali without `libfuse.so.2` or `--appimage-extract-and-run`. The Compose copy step runs as the invoking numeric UID/GID, so artifacts are not root-owned. The rolling arm64 build targets current Kali; older arm64 distributions may not meet its glibc baseline.
 
 **macOS Apple Silicon `.app`:**
 
@@ -179,7 +179,7 @@ AdaptixC2-Omni/
 ├── patches/              ← build-time patches against submodules
 │   ├── adaptixserver-go-dependencies.patch
 │   ├── adaptixclient-macos-bundle.patch
-│   ├── adaptixclient-kali-arm64-stage.patch
+│   ├── adaptixclient-linux-appimage.patch
 │   └── extension-kit-nanodump-host-strip.patch
 ├── .dockerignore         ← excludes submodule .git pointer files from build context
 │
@@ -209,7 +209,7 @@ Every customization is either a workspace-root file we authored or a tracked pat
 | Fixed Go dependency floors | `patches/adaptixserver-go-dependencies.patch` | Raises `golang.org/x/{crypto,image,net,text}` to fixed versions in the primary server module before `go work sync`, so the server and every extender compile against the same remediated workspace build list without changing the pinned submodule. |
 | macOS bundle CMake additions | `patches/adaptixclient-macos-bundle.patch` | Upstream `AdaptixClient/CMakeLists.txt` doesn't set `MACOSX_BUNDLE`, so a plain `make` produces a bare exe. The patch adds an `if(APPLE)` block setting bundle properties; `scripts/build-client-macos.sh` applies and reverts it around each build. |
 | nanodump host-strip fix | `patches/extension-kit-nanodump-host-strip.patch` | Upstream nanodump strips its host-built `restore_signature` ELF with the Windows cross-strip, which breaks on arm64 hosts. The patch deletes the redundant strip line; `gcc -s` on the prior line already strips it. Applied inside the build container by the Dockerfile. |
-| arm64 client build via kali-rolling | `patches/adaptixclient-kali-arm64-stage.patch` | aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x, so the upstream `build-client` Dockerfile stage can't target arm64. The patch appends a new `build-client-kali` stage that uses kali-rolling's distro Qt 6.10.2 + `linuxdeploy` instead. Purely additive — the original `build-client` stage is unchanged, so amd64 builds are byte-equivalent to upstream. Applied on the host by `scripts/build-client-linux.sh` with auto-revert. |
+| Modern amd64/arm64 Linux AppImage packaging | `patches/adaptixclient-linux-appimage.patch` | Replaces the obsolete AppImageKit appimagetool in the amd64 stage and adds the Kali-rolling Qt6 arm64 stage. The modern appimagetool `continuous` assets are SHA-256 locked to commit `8c8c91f`; the embedded type-2 runtimes are fetched from dated release `20251108`, SHA-256 checked, and supplied explicitly with `--runtime-file`. Applied on the host by `scripts/build-client-linux.sh` with auto-revert. |
 | macOS native build script | `scripts/build-client-macos.sh` | macdeployqt + RPATH cleanup + ad-hoc signing — required to produce a portable Apple Silicon `.app` that launches outside the build host. |
 | Windows prerequisite installer | `scripts/install-prereqs-windows.ps1` | Automates the one-time setup of MSYS2, MinGW64 toolchain, Qt6, OpenSSL, CMake, and Ninja needed by `build.bat` on a Windows machine. |
 | Kharon graft inside the build | (Dockerfile-only, no source-tree change) | The Dockerfile copies `Kharon/agent_kharon` and `Kharon/listener_kharon_http` into `AdaptixServer/extenders/` and runs `go work use` *inside* the container, mirroring what `Kharon/setup_kharon.sh` does — but only inside the build, never on the host tree. |
@@ -253,13 +253,14 @@ cd ..
 # Confirm our patches still apply cleanly to the new tree
 git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch
 git -C AdaptixC2 apply --check ../patches/adaptixclient-macos-bundle.patch
+git -C AdaptixC2 apply --check ../patches/adaptixclient-linux-appimage.patch
 
 # Commit the bump
 git add AdaptixC2
 git commit -m "Bump AdaptixC2 to <new-tag>"
 ```
 
-If either `git apply --check` command fails, upstream has drifted into that patch's hunks. Retire a patch when upstream includes the fix, or regenerate it per [BLUEPRINT.md §10](./BLUEPRINT.md). Repeat the same flow for the other three submodules. For full diff-check guidance (dependency floors, profile merges, Dockerfile inheritance, and toolchain changes), follow the §10 upgrade path in BLUEPRINT.md end-to-end.
+If a `git apply --check` command fails, upstream has drifted into that patch's hunks. Retire a patch when upstream includes the fix, or regenerate it per [BLUEPRINT.md §10](./BLUEPRINT.md). Repeat the same flow for the other submodules. For full diff-check guidance (dependency floors, profile merges, Dockerfile inheritance, tool/runtime pins, and toolchain changes), follow the §10 upgrade path in BLUEPRINT.md end-to-end.
 
 ---
 

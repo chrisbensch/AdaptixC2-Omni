@@ -13,13 +13,13 @@
 #
 # Two build paths:
 #   amd64 → build-client stage (ubuntu:22.04 + aqtinstall Qt 6.9.2 +
-#           linuxdeployqt + appimagetool, all x86_64-only)
+#           linuxdeployqt + modern appimagetool, all x86_64-only)
 #   arm64 → build-client-kali stage (kalilinux/kali-rolling + distro Qt 6.10.2 +
-#           linuxdeploy + linuxdeploy-plugin-qt, both arches supported)
+#           linuxdeploy + linuxdeploy-plugin-qt + modern appimagetool)
 #
 # The arm64 path exists because aqtinstall publishes no Linux aarch64 Qt
 # binaries for any version through 6.11.x; Kali's distro Qt6 fills the gap.
-# Applies patches/adaptixclient-kali-arm64-stage.patch to AdaptixC2/Dockerfile
+# Applies patches/adaptixclient-linux-appimage.patch to AdaptixC2/Dockerfile
 # for the duration of the build (auto-reverts on exit).
 
 set -euo pipefail
@@ -29,8 +29,25 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/AdaptixClient-dist"
 COMPOSE_PROFILE="build-client"
 COMPOSE_SVC="client-linux"
-PATCH="${REPO_ROOT}/patches/adaptixclient-kali-arm64-stage.patch"
+PATCH="${REPO_ROOT}/patches/adaptixclient-linux-appimage.patch"
 ADAPTIX_REPO="${REPO_ROOT}/AdaptixC2"
+PATCH_APPLIED=0
+
+cleanup() {
+    local exit_status=$?
+
+    if (( PATCH_APPLIED )); then
+        if git -C "$ADAPTIX_REPO" apply -R "$PATCH"; then
+            echo "[*] Restored AdaptixC2/Dockerfile"
+        else
+            echo "[!] Failed to reverse $PATCH; AdaptixC2/Dockerfile is still modified." >&2
+            [[ $exit_status -ne 0 ]] || exit_status=1
+        fi
+    fi
+
+    trap - EXIT
+    exit "$exit_status"
+}
 
 DO_CLEAN=0
 ARCH=host
@@ -110,12 +127,13 @@ if [[ "$HOST_ARCH" != "$ARCH" ]]; then
     echo "    First build can take 10+ minutes; subsequent builds use the layer cache."
 fi
 
-# ---- apply kali arm64 stage patch (auto-revert on exit) ----------------------
+# ---- apply Linux client patch (auto-revert on exit) --------------------------
 
 if git -C "$ADAPTIX_REPO" apply --check "$PATCH" 2>/dev/null; then
     echo "[*] Applying $PATCH"
     git -C "$ADAPTIX_REPO" apply "$PATCH"
-    trap 'git -C "$ADAPTIX_REPO" apply -R "$PATCH" 2>/dev/null || true' EXIT
+    PATCH_APPLIED=1
+    trap cleanup EXIT
 elif git -C "$ADAPTIX_REPO" apply --check -R "$PATCH" 2>/dev/null; then
     echo "[+] Patch already applied (dirty submodule); leaving as-is"
 else
@@ -139,6 +157,8 @@ export ADAPTIX_CLIENT_ARCH="$ARCH"
 export ADAPTIX_CLIENT_PLATFORM="$DOCKER_PLATFORM"
 export ADAPTIX_CLIENT_TARGET="$BUILD_TARGET"
 export ADAPTIX_CLIENT_IMG_ARCH="$IMG_ARCH"
+export ADAPTIX_CLIENT_HOST_UID="$(id -u)"
+export ADAPTIX_CLIENT_HOST_GID="$(id -g)"
 
 echo "[*] Building Linux client (arch=$ARCH, platform=$DOCKER_PLATFORM, target=$BUILD_TARGET)"
 cd "$REPO_ROOT"
@@ -159,5 +179,4 @@ rm -rf "${DIST_DIR}/AdaptixClient.AppDir"
 SIZE="$(du -sh "$APPIMAGE" | awk '{print $1}')"
 echo
 echo "[+] Done. AppImage: $APPIMAGE  ($SIZE)"
-echo "[i] Run with: $APPIMAGE"
-echo "[i] If FUSE is unavailable: $APPIMAGE --appimage-extract-and-run"
+echo "[i] Run directly on Linux with: $APPIMAGE"

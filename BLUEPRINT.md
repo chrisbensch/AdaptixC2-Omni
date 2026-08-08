@@ -42,7 +42,7 @@ The workspace itself is a git repo. The four upstream projects are git **submodu
 ├── patches/                                       ← build-time patches against submodules
 │   ├── adaptixserver-go-dependencies.patch        ← see §5.5 / §6.3
 │   ├── adaptixclient-macos-bundle.patch           ← see §5.5 / §6.1
-│   ├── adaptixclient-kali-arm64-stage.patch       ← see §5.5 / §6.5
+│   ├── adaptixclient-linux-appimage.patch         ← see §5.5 / §6.5
 │   └── extension-kit-nanodump-host-strip.patch    ← see §5.5 / §6.4
 │
 ├── .github/
@@ -74,7 +74,8 @@ These are the exact commits the integration was designed for. When re-applying a
 | GOEXPERIMENT | `jsonv2,greenteagc` | Required by upstream Makefile / Dockerfile; preserved in the new Dockerfile as an env default. |
 | go-win7 | HEAD of `Adaptix-Framework/go-win7` | Win7-compatible Go runtime needed by Gopher Agent and consumed by Kharon's beacon. Cloned `--depth=1`. |
 | Qt (Linux client AppImage, amd64) | **6.9.2** (via aqtinstall, from upstream AdaptixC2/Dockerfile `build-client` stage) | Reused as-is from upstream. |
-| Qt (Linux client AppImage, arm64) | **6.10.2** (distro packages from `kalilinux/kali-rolling`, via new `build-client-kali` stage added by `patches/adaptixclient-kali-arm64-stage.patch`) | aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x; Kali's distro Qt6 fills the gap. API-compatible with 6.9.2. |
+| Qt (Linux client AppImage, arm64) | **6.10.2** (distro packages from `kalilinux/kali-rolling`, via new `build-client-kali` stage added by `patches/adaptixclient-linux-appimage.patch`) | aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x; Kali's distro Qt6 fills the gap. API-compatible with 6.9.2. |
+| Linux AppImage packager/runtime | `AppImage/appimagetool` continuous commit **`8c8c91f`** + `AppImage/type2-runtime` release **`20251108`** | The packager has no stable versioned release: its x86_64/aarch64 continuous assets are SHA-256 locked. The dated runtime assets are also SHA-256 locked and passed explicitly with `--runtime-file`, so neither layer floats silently. |
 | Qt (macOS client) | Homebrew **qt@6** (currently 6.11.x) | Native arm64; works because of the `if(APPLE)` CMake patch. |
 | Qt (Windows client) | MSYS2 `mingw-w64-x86_64-qt6` | Used by both the native host installer and the Windows-container build. |
 | Debian base (runtime) | **`bookworm-slim@sha256:0104b33…`** | Pinned by manifest-list digest. Re-fetch via `docker buildx imagetools inspect debian:bookworm-slim` when bumping; both digests are also queried by Trivy in CI to surface CVEs that would justify a bump. |
@@ -92,7 +93,7 @@ These were resolved up-front via `AskUserQuestion`. Repeat them if re-running th
 3. **PostEx-Arsenal `postex_sc/`:** trust the checked-in `.bin` files; do not rebuild in the container (saves clang/llvm/nasm runtime in postex_sc subdirs).
 4. **macOS bundle:** patch `AdaptixClient/CMakeLists.txt` with `MACOSX_BUNDLE` properties guarded by `if(APPLE)`. Build natively via Homebrew Qt, then `macdeployqt` + RPATH cleanup + ad-hoc resign.
 5. **macOS arch:** Apple Silicon **arm64 only** (no universal binary).
-6. **Linux AppImage delivery:** add a `client-linux` service to the workspace-root `docker-compose.yml`. For amd64 it points at `AdaptixC2/Dockerfile`'s upstream `build-client` stage (Qt 6.9.2 via aqtinstall, ubuntu:22.04). For arm64 it points at a new `build-client-kali` stage added via `patches/adaptixclient-kali-arm64-stage.patch` (Qt 6.10.2 via distro packages on kali-rolling) — aqtinstall publishes no aarch64 Qt binaries. Target swap is driven by `ADAPTIX_CLIENT_TARGET`; defaults preserve the original amd64 path.
+6. **Linux AppImage delivery:** add a `client-linux` service to the workspace-root `docker-compose.yml`. `patches/adaptixclient-linux-appimage.patch` replaces the obsolete AppImageKit packager in the amd64 `build-client` stage and adds an arm64 `build-client-kali` stage (Qt 6.10.2 via Kali rolling because aqtinstall publishes no aarch64 Qt binaries). Both paths embed a checksum-locked modern type-2 runtime. Target swap is driven by `ADAPTIX_CLIENT_TARGET`; the one-shot copy container runs as the invoking host UID/GID so output is not root-owned.
 7. **TLS cipher policy:** ECDHE-only suites in `profile.kharon.yaml`. The legacy `TLS_RSA_WITH_AES_*_GCM_*` suites (no forward secrecy) that upstream ships were dropped to enforce PFS.
 8. **Upstream version pinning at build time:** `golang:1.25.12-bookworm` (specific patch, not the floating `1.25`) and `go-win7` pinned via `ARG GO_WIN7_SHA` (currently `15ad42b…`). A Go bump updates the `FROM` tag and manifest-list digest together; a go-win7 bump is a one-line ARG edit. The Go patch version is bumped reactively when Trivy flags a fixed standard-library CVE.
 
@@ -150,7 +151,7 @@ The full file is at `./Dockerfile` (170 lines). Do not duplicate here — copy v
 
 ### 5.2 `docker-compose.yml`
 
-Three services. The `builder` and `server` services have **no platform pin** (host arch by default; override with `DOCKER_DEFAULT_PLATFORM`). Only `client-linux` is pinned to `linux/amd64` because the AppImage it produces is x86_64 by definition.
+Three services. The `builder` and `server` services have **no platform pin** (host arch by default; override with `DOCKER_DEFAULT_PLATFORM`). `client-linux` is selected as `linux/amd64` or `linux/arm64` by `scripts/build-client-linux.sh`; direct Compose usage defaults to amd64 for backward compatibility.
 
 ```yaml
 name: adaptixc2-omni
@@ -210,6 +211,7 @@ services:
         IMG_ARCH: ${ADAPTIX_CLIENT_IMG_ARCH:-x86_64}
     image: adaptixc2-omni-client-linux-builder:${ADAPTIX_CLIENT_ARCH:-amd64}
     container_name: adaptixc2-omni-client-linux-builder-${ADAPTIX_CLIENT_ARCH:-amd64}
+    user: "${ADAPTIX_CLIENT_HOST_UID:-1000}:${ADAPTIX_CLIENT_HOST_GID:-1000}"
     volumes:
       - ./AdaptixClient-dist:/client-dist-output
     command: sh -c "cp -r /client-dist/. /client-dist-output/"
@@ -217,10 +219,10 @@ services:
 
 `client-linux` targets one of two stages depending on the `ADAPTIX_CLIENT_TARGET` env var (set by `scripts/build-client-linux.sh` based on `--arch`):
 
-- **amd64** → upstream `build-client` (lines ≈21–121 of `AdaptixC2/Dockerfile`): Qt 6.9.2 via aqtinstall, ubuntu:22.04, linuxdeployqt + appimagetool. Unchanged from upstream; we inherit any changes.
-- **arm64** → new `build-client-kali` stage added by `patches/adaptixclient-kali-arm64-stage.patch`: kalilinux/kali-rolling + distro Qt 6.10.2, linuxdeploy + linuxdeploy-plugin-qt + appimagetool. The arm64 path exists because aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x; Kali's distro Qt6 fills the gap. Qt 6.10.2 is API-compatible with 6.9.2 (AdaptixClient pins no minor minimum).
+- **amd64** → patched upstream `build-client` (lines ≈21–138 of `AdaptixC2/Dockerfile`): Qt 6.9.2 via aqtinstall, Ubuntu 22.04, linuxdeployqt, and modern appimagetool/type-2 runtime packaging.
+- **arm64** → `build-client-kali` added by `patches/adaptixclient-linux-appimage.patch`: Kali rolling + distro Qt 6.10.2, linuxdeploy + linuxdeploy-plugin-qt, and the same modern packaging policy. The arm64 path exists because aqtinstall publishes no Linux aarch64 Qt binaries through 6.11.x.
 
-Defaults reproduce the original amd64 path (no env vars, no patch effect on the upstream stage), so existing workflows are unaffected.
+`scripts/build-client-linux.sh` exports `ADAPTIX_CLIENT_HOST_UID="$(id -u)"` and `ADAPTIX_CLIENT_HOST_GID="$(id -g)"`. Compose uses that identity only for the final copy container; Docker image construction remains root. This makes the bind-mounted AppImage owned by the invoking user on Linux and macOS hosts. Direct `docker compose` callers get a `1000:1000` fallback and can override both variables.
 
 **Change from earlier revisions:** the `server` service no longer bind-mounts `./profile.kharon.yaml:/app/profile.yaml:ro`. The host file is now the **template** baked into the image at build time; the **rendered** profile lives under `./data/profile.yaml` (managed by the entrypoint, §5.7). Editing the workspace `profile.kharon.yaml` after first start has no effect on a running container — edit `./data/profile.yaml` and `docker compose --profile runtime restart`, or `rm ./data/profile.yaml` and re-launch with `ADAPTIX_*` env vars to re-render from the template.
 
@@ -319,7 +321,7 @@ Build-time patches against submodule trees we don't own. Each is a unified-diff 
 |---|---|---|
 | `adaptixserver-go-dependencies.patch` | `AdaptixC2/AdaptixServer/go.{mod,sum}` | `Dockerfile` `build-server` stage (container only) |
 | `adaptixclient-macos-bundle.patch` | `AdaptixC2/AdaptixClient/CMakeLists.txt` | `scripts/build-client-macos.sh` (host, with auto-revert) |
-| `adaptixclient-kali-arm64-stage.patch` | `AdaptixC2/Dockerfile` | `scripts/build-client-linux.sh` (host, with auto-revert) |
+| `adaptixclient-linux-appimage.patch` | `AdaptixC2/Dockerfile` | `scripts/build-client-linux.sh` (host, with auto-revert) |
 | `extension-kit-nanodump-host-strip.patch` | `Extension-Kit/Creds-BOF/nanodump/Makefile` | `Dockerfile` `build-bofs` stage (container only) |
 
 When upstream drifts and a patch stops applying, the apply script (or `docker compose build`) fails fast with a clear message. Regenerate the patch from a freshly-rebased manual edit, then commit the new `.patch` file. Don't accumulate patches: if a workaround can be replaced by an upstream change, push for that instead.
@@ -465,9 +467,13 @@ When refreshing AdaptixC2, retire this patch if upstream already selects these v
 
 Worth pushing upstream as a one-line PR; until then, this patch keeps cross-arch builds working.
 
-### 6.5 `AdaptixC2/Dockerfile` — Kali-rolling arm64 client stage
+### 6.5 `AdaptixC2/Dockerfile` — modern Linux AppImage runtime + Kali arm64 stage
 
-**Stored as `patches/adaptixclient-kali-arm64-stage.patch`; applied by `scripts/build-client-linux.sh` on the host with auto-revert via `trap`, so the submodule tree stays clean between builds.** The patch appends a new `build-client-kali` stage to `AdaptixC2/Dockerfile` — purely additive, the upstream `build-client` stage is unchanged.
+**Stored as `patches/adaptixclient-linux-appimage.patch`; applied by `scripts/build-client-linux.sh` on the host with auto-revert via an `EXIT` trap, so the submodule tree returns to its pre-build state.** The patch has two responsibilities: replace upstream's obsolete `AppImage/AppImageKit` appimagetool in the amd64 stage, and append the `build-client-kali` arm64 stage.
+
+Upstream's appimagetool embeds obsolete AppImageKit runtime `5735cc5`, which calls `dlopen("libfuse.so.2")` and therefore cannot mount directly on current Kali (FUSE 3 is present, but no `libfuse2`/`libfuse2t64` package exists). Both patched paths use the modern `AppImage/appimagetool` project and explicitly pass a modern statically linked type-2 runtime. Direct launch no longer needs libfuse.so.2 or extraction mode.
+
+**Pinning policy.** `AppImage/appimagetool` publishes a moving `continuous` release rather than a practical stable version tag. The downloaded assets are therefore fail-closed by SHA-256 and documented against release commit `8c8c91f`: x86_64 `a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0`, aarch64 `1b00524ba8c6b678dc15ef88a5c25ec24def36cdfc7e3abb32ddcd068e8007fe`. If upstream moves `continuous`, the build fails until both the commit and checksum are intentionally reviewed and updated. The embedded runtime is more strongly pinned to dated `AppImage/type2-runtime` release `20251108`, with x86_64 SHA-256 `2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d` and aarch64 SHA-256 `00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444`; `--runtime-file` prevents appimagetool's normal latest-runtime download.
 
 Why a second stage instead of parameterizing the first: upstream's `build-client` installs Qt via aqtinstall (`aqt install-qt linux desktop 6.9.2 linux_gcc_64`). aqtinstall publishes no Linux aarch64 Qt binaries for any version through 6.11.x (verified via `aqt list-qt linux desktop --arch 6.9.2` — returns only `linux_gcc_64`). The new stage takes a different approach: base on `kalilinux/kali-rolling`, install Qt 6 via apt (currently Qt 6.10.2; API-compatible with 6.9.2 since AdaptixClient pins no minor minimum), and use `linuxdeploy` + `linuxdeploy-plugin-qt` instead of linuxdeployqt (the latter is amd64-only and unmaintained).
 
@@ -481,11 +487,12 @@ Package set (see the patch for the full list). Five gotchas discovered iterative
 
 Additional fine points:
 
-- **AppImages get pre-extracted at install time.** Each of `linuxdeploy`, `linuxdeploy-plugin-qt`, and `appimagetool` is downloaded as an AppImage, then `--appimage-extract`-ed into `/opt/<tool>/`, with `/opt/<tool>/AppRun` symlinked into `/usr/local/bin/<tool>`. This avoids needing FUSE at build time (Kali ships no `libfuse2` — only `libfuse3-dev`) and avoids the AppImage runtime's per-invocation extract overhead.
-- **`IMG_ARCH` defaults to `aarch64`** — the stage's primary purpose. Override to `x86_64` to produce a distro-Qt amd64 AppImage as an alternative to the aqtinstall path (untested but plumbing supports it).
+- **AppImage-hosted build tools get pre-extracted at install time.** `linuxdeploy`, `linuxdeploy-plugin-qt`, and modern `appimagetool` are extracted into `/opt/<tool>/`, with `AppRun` symlinked into `/usr/local/bin`. This avoids needing FUSE in the build container. Normal execution of the resulting AppImage is direct; pre-extraction here is only for build tools.
+- **Remaining floating tool inputs are explicit.** The inherited amd64 `linuxdeployqt` download and the arm64 `linuxdeploy` / `linuxdeploy-plugin-qt` downloads still use their projects' `continuous` assets without checksum locks. They affect deployment contents but not the separately pinned AppImage runtime. Pin their reviewed asset checksums when reproducible packaging becomes a requirement; until then, appimagetool and the runtime remain the fail-closed runtime-compatibility boundary addressed here.
+- **`IMG_ARCH` defaults to `aarch64`** because `build-client-kali` is the arm64 path. amd64 uses the patched upstream stage.
 - **Deprecation warnings during compile** about `QSortFilterProxyModel::invalidateFilter()` (deprecated in Qt 6.10 — use `begin/endFilterChange()` instead). Non-fatal; upstream-fix territory.
 
-Kali rolling is, by definition, a rolling distro. We accept that the Qt version baked into the arm64 AppImage will drift over time; if a future Qt minor breaks the Adaptix client, pin a snapshot tag in the `FROM` line. Build time on Apple Silicon: ≈4 minutes (≈90s apt install + ≈130s compile + ≈30s deploy + ≈10s appimage packaging). Output AppImage: ≈63 MB.
+Kali rolling is, by definition, a rolling distro. We accept that the Qt version and glibc baseline baked into the arm64 AppImage will drift over time; if a future Qt minor breaks the Adaptix client, pin a snapshot tag in the `FROM` line. Because application libraries are built against Kali rolling, the arm64 artifact currently claims current-Kali compatibility only; older arm64 distributions may have an insufficient glibc and are not supported without a build on an older viable baseline. Build time on Apple Silicon: ≈4 minutes (≈90s apt install + ≈130s compile + ≈30s deploy + ≈10s appimage packaging). Output AppImage: ≈63 MB.
 
 ## 7. Build commands
 
@@ -511,11 +518,9 @@ docker compose --profile runtime up -d
 docker compose --profile runtime logs -f
 docker compose --profile runtime down
 
-# Linux client AppImage  (≈10 min under QEMU; 57 MB at AdaptixClient-dist/AdaptixClient-x86_64.AppImage)
-docker compose --profile build-client build
-docker compose --profile build-client up --abort-on-container-exit
-
-# Linux client AppImage via the helper script (preferred — handles host vs. amd64 vs. arm64 and the kali-arm64 patch):
+# Linux client AppImage. The helper is required: it handles architecture,
+# temporary patch apply/revert, and host ownership. Raw Compose commands against
+# a clean submodule do not include the workspace-owned client patch.
 ./scripts/build-client-linux.sh                  # host arch
 ./scripts/build-client-linux.sh --arch amd64     # force x86_64 (Qt 6.9.2 via aqtinstall)
 ./scripts/build-client-linux.sh --arch arm64     # force aarch64 (Qt 6.10.2 via kali-rolling)
@@ -550,8 +555,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build-client-windows-container.
 7. Connect a client to `https://<host>:4321/endpoint` using an operator credential from `data/credentials.txt` (or your `ADAPTIX_OPERATORS` value). Listener creation dialog shows 9 extenders. AxScript Manager shows `extension-kit.axs` and `kh_modules.axs` already loaded.
 
 **Linux AppImage:**
-1. `file AdaptixClient-dist/AdaptixClient-x86_64.AppImage` → `ELF 64-bit LSB executable, x86-64, … stripped`
-2. On a Linux x86_64 host (or arm64 host with `qemu-user-static`): `chmod +x AdaptixClient-x86_64.AppImage && ./AdaptixClient-x86_64.AppImage` opens the GUI.
+1. `file AdaptixClient-dist/AdaptixClient-{x86_64,aarch64}.AppImage` reports an ELF executable for the selected architecture.
+2. `test -x AdaptixClient-dist/AdaptixClient-<arch>.AppImage` succeeds, and `stat` reports the invoking host UID/GID rather than root.
+3. On a matching current Kali system, run `./AdaptixClient-dist/AdaptixClient-<arch>.AppImage` directly — do not use `--appimage-extract-and-run`. The GUI opens with a display; in a headless task, Qt reaching `could not connect to display` proves that the AppImage runtime mounted and invoked the payload.
+4. Output must not mention `libfuse.so.2`, a mount failure, or an extraction-mode requirement.
 
 **macOS .app:**
 1. `file AdaptixClient-dist/AdaptixClient.app/Contents/MacOS/AdaptixClient` → `Mach-O 64-bit executable arm64`
@@ -576,7 +583,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-client-windows-container.
 1. **macOS — macdeployqt does NOT fix the main exe's rpath.** Out of the box it leaves `/opt/homebrew/opt/qt/lib` on the binary, which means `@rpath/libsharpyuv.0.dylib` (and similar transitive libwebp deps) fail to resolve outside the build host → the app crashes at launch with no console output. The fix is in step 6 of `scripts/build-client-macos.sh` and is **mandatory** for portability.
 2. **macOS — codesign verification errors from macdeployqt are noise** but the ad-hoc resign step at the end of the script makes the final bundle launch on a clean Mac.
 3. **macOS — first-launch Gatekeeper warning** is expected because the bundle is ad-hoc signed (no Developer ID). For unattended distribution, codesign with a Developer ID + notarize. Out of scope here.
-4. **Linux AppImage — `libfuse2` and `fuse` apt packages** are required inside the build container; already present in `AdaptixC2/Dockerfile`'s build-client stage. Docker Desktop does NOT need fuse access on the *host* to build (only to run AppImages on a Linux host).
+4. **Linux AppImage runtime — do not regress to AppImageKit.** The old `AppImage/AppImageKit` appimagetool embeds runtime `5735cc5` and fails on current Kali with `dlopen(): error loading libfuse.so.2`. Keep `AppImage/appimagetool`, the checksum gates, and the explicit dated `--runtime-file`. The amd64 upstream stage still installs `libfuse2`/`fuse` for its inherited build environment, but the produced AppImage runtime no longer links or dlopens libfuse.so.2.
 5. **Server build — Kharon beacon needs `clang`, `nasm`, `llvm`** in the base stage. These are NOT in upstream `AdaptixC2/Dockerfile`'s `base` (which only had `mingw-w64 + gcc/g++`). Without them `agent_kharon/src_beacon/Makefile` fails because it shells `clang++ -target x86_64-w64-mingw32` and `nasm -f win64`.
 6. **Server build — `make -C agent_kharon agent` is redundant** with `make server-ext` (the AdaptixC2 Makefile's `extenders` target invokes each extender's default `all` target, and `agent_kharon`'s `all` is `clean plugin agent`). The Dockerfile keeps it as belt-and-suspenders; if the build slows materially in the future, drop it.
 7. **AdaptixC2 Makefile auto-discovery.** Adding more extenders requires only:
@@ -602,6 +609,7 @@ When refreshing against newer upstreams:
    cd AdaptixC2 && git fetch origin && git checkout <new-tag-or-sha> && cd ..
    git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch
    git -C AdaptixC2 apply --check ../patches/adaptixclient-macos-bundle.patch
+   git -C AdaptixC2 apply --check ../patches/adaptixclient-linux-appimage.patch
    git add AdaptixC2 && git commit -m "Bump AdaptixC2 to <tag>"
    ```
    If `git apply --check` fails, jump to step 2 to refresh the patch before committing the bump. Repeat for `Extension-Kit`, `Kharon`, `PostEx-Arsenal`. Update §2 baselines in the same commit (or a follow-up).
@@ -609,6 +617,7 @@ When refreshing against newer upstreams:
 2. **Diff-check the patch sites:**
    - `AdaptixC2/AdaptixServer/go.mod` + `go.sum` (patch: `adaptixserver-go-dependencies.patch`). If upstream now selects the same or newer fixed module versions, retire the patch. Otherwise regenerate the minimal `go get` delta with the pinned Go toolchain, capture only the manifest/checksum changes, restore the submodule files, and verify with `git -C AdaptixC2 apply --check ../patches/adaptixserver-go-dependencies.patch`.
    - `AdaptixC2/AdaptixClient/CMakeLists.txt` (patch: `adaptixclient-macos-bundle.patch`). Find `add_executable(AdaptixClient …)`. If upstream now adds `MACOSX_BUNDLE` or sets bundle props themselves, retire the patch and harmonize. Otherwise re-apply manually, fix any rejected hunks, and regenerate: `git -C AdaptixC2 diff -- AdaptixClient/CMakeLists.txt > patches/adaptixclient-macos-bundle.patch`. Bump `MACOSX_BUNDLE_BUNDLE_VERSION` inside the patch to match the new release tag.
+   - `AdaptixC2/Dockerfile` (patch: `adaptixclient-linux-appimage.patch`). Check both the upstream amd64 packaging commands and the insertion point before `build-server`. If upstream adopts modern `AppImage/appimagetool`, retire the replacement hunk but retain the explicit runtime/checksum policy unless upstream is equivalently pinned. Reverify the arm64 Kali package names and regenerate the unified patch against the new submodule commit.
    - `Extension-Kit/Creds-BOF/nanodump/Makefile` (patch: `extension-kit-nanodump-host-strip.patch`). If upstream has fixed the redundant `STRIP_x64 scripts/restore_signature` line themselves (or refactored that target), retire the patch. Otherwise re-apply manually and regenerate: `git -C Extension-Kit diff -- Creds-BOF/nanodump/Makefile > patches/extension-kit-nanodump-host-strip.patch`. Worth checking whether the upstream PR has been merged before re-applying.
 3. **Diff-check `AdaptixC2/AdaptixServer/profile.yaml`** vs `profile.kharon.yaml`. If upstream added new HttpServer fields or a new default extender, mirror those into `profile.kharon.yaml` while keeping:
    - The 2 Kharon extender lines and 2 axscripts entries.
@@ -616,7 +625,7 @@ When refreshing against newer upstreams:
    - The ECDHE-only `cipher_suites` list (drop any TLS_RSA_* lines upstream re-adds).
    - The absolute `/app/data/server.rsa.{crt,key}` paths.
    If upstream rearranges the YAML enough that the entrypoint's `sed` substitutions no longer match (e.g. they move `operators:` indentation), update `docker/entrypoint.sh` in lockstep.
-4. **Diff-check the AdaptixC2 client `build-client` Dockerfile stage**. If `QT_VERSION` or apt deps changed, the workspace `client-linux` service inherits the change for free (no edit).
+4. **Refresh AppImage pins intentionally.** Resolve the current `AppImage/appimagetool` continuous release commit and SHA-256 for both architectures, choose a dated `AppImage/type2-runtime` release, update all four checksums plus the documented identifiers together, and run clean amd64 plus arm64 builds. A checksum failure is expected when upstream moves `continuous`; never delete the check just to make the build pass.
 5. **Diff-check `AdaptixC2/Makefile`** for the `EXTENDER_DIRS` glob and the `server-ext` target. Both are stable; if either is renamed, update `Dockerfile` step `make -C /src/AdaptixC2 server-ext`.
 6. **Diff-check `Kharon/setup_kharon.sh`** for additional steps. Currently we inline only its 3 critical actions (copy two dirs, `go work use`, `make`). If new prerequisites appear (e.g. a `pip install` step), mirror them in the `base` or `build-server` stage.
 7. **Diff-check `Kharon/agent_kharon/src_beacon/Makefile`** for new toolchain deps. The current set (`clang`, `nasm`, `llvm`, `mingw-w64`) covers it; if a future revision adds `python3-foo` or similar, add to `base` stage's apt list.
