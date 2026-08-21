@@ -592,7 +592,31 @@ cd sidecar/nax-builder && go test ./naxbuilder/ -run 'TestWorker' -v && \
   git commit -m "sidecar: worker listener + main binary + socket-path convention"
 ```
 
-## Task 6 — Server-side mapping: BuildPayload → sidecar call (with fake-builder test)
+## Task 6 — Server-side mapping: BuildPayload → sidecar call (delivered as a patch)
+
+**Handoff decision (Task 6 design, recorded):** The server plugin changes are
+implemented as a **patch** in `patches/` (applied at Docker build time + to the
+submodule working tree to run the host test) — **not** a submodule commit, per repo
+convention. The submodule currently sits at its pinned SHA `bd032d9` (clean).
+
+**Architecture (narrowest Milestone 2 scope, respects "server keeps the pure-Go
+generators"):**
+
+- The **server** generates `Config.h`/`Config_profile.h`/`Config_sleepmask.h` (it keeps
+  `generateConfigH*/generateProfileH/generateSleepmaskH`), builds the sleepmask BOF native
+  (during A), and passes the three headers (as bytes) + the build input through `BuildProfile`.
+- The **sidecar** (sidecar call, `naxbuilder`) writes the three headers into its own copy of
+  the pinned NaX source, runs `make <components-target>` (the beacon native compile — the
+  server already built the sleepmask, so the sidecar does **not**), reads the 5 components,
+  and repacks. `buildViaSidecar(req)` in `pl_nax_sidecar.go` just dials + sends + repacks
+  with the untouched in-server `packNaxBin(...)`.
+- **Scope-cut:** branch-scoped HTTP locals (`callbackHost`/`callbackPort`/`bootURI`/`listenerSSL`)
+  and the SMB local (`pipeName`) are HOISTED to function scope so the inline request
+  (built from the plan's Step 2 locals) compiles. The sidecar's `handleRequest` writes the
+  headers + runs the beacon compile + reads the components (see the plan's Task 5 handler).
+
+Repo-root `go.work` (using the submodule + `sidecar/nax-builder`) is the mechanism letting the
+submodule import `naxbuilder` for the host test.
 
 **Files:**
 - Modify: `NaX/src_server/agent_nonameax/pl_build_payload.go` (the tail of `BuildPayload`)
