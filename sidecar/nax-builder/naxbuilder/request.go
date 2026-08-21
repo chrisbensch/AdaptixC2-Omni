@@ -86,7 +86,11 @@ func (r *NaxBuildRequest) Validate() error {
 		return fmt.Errorf("transport %q not allowed (want \"http\" or \"smb\")", r.Transport)
 	}
 
-	switch r.OutputFormat {
+	of := r.OutputFormat
+	if of == "" {
+		of = "bin" // server default (outputFormat := "bin")
+	}
+	switch of {
 	case "bin", "exe", "dll", "svc":
 	default:
 		return fmt.Errorf("outputFormat %q not allowed (want bin|exe|dll|svc)", r.OutputFormat)
