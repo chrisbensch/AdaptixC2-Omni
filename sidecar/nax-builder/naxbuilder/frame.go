@@ -32,19 +32,29 @@ func WriteFrame(w io.Writer, v any) error {
 // ReadFrame reads one length-prefixed JSON frame into v. It rejects frames whose
 // declared length exceeds maxBytes as well as short (truncated) reads.
 func ReadFrame(r io.Reader, v any, maxBytes int) error {
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
-		return err
-	}
-	n := binary.BigEndian.Uint32(lenBuf[:])
-	if int(n) > maxBytes {
-		return errFrameTooLarge
-	}
-	body := make([]byte, n)
-	if _, err := io.ReadFull(r, body); err != nil {
+	body, err := readFrameBody(r, maxBytes)
+	if err != nil {
 		return err
 	}
 	return json.Unmarshal(body, v)
+}
+
+// readFrameBody reads one length-prefixed frame's body bytes, rejecting a
+// declared length greater than maxBytes.
+func readFrameBody(r io.Reader, maxBytes int) ([]byte, error) {
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(lenBuf[:])
+	if int(n) > maxBytes {
+		return nil, errFrameTooLarge
+	}
+	body := make([]byte, n)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 // ServeConn accepts exactly one request/response exchange on conn: it reads a
