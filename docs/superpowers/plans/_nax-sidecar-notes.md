@@ -1,5 +1,11 @@
 # NaX Sidecar — Standing Context
 
+> **RESUME POINT:** Next task is **Task 1** in `docs/superpowers/plans/2026-08-21-nax-sidecar-prototype.md` (builder-module scaffold + request/response types). First command:
+> `cd sidecar/nax-builder && go mod init github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder` (create it first if the dir doesn't exist), then write `naxbuilder/request.go` + `naxbuilder/request_test.go` per the plan, run `go test ./naxbuilder/ -run TestComponentPath -v`, commit.
+> Then advance through Tasks 2–8; end with the Docker smoke test `scripts/smoke-nax-sidecar.sh`.
+
+## NaX Sidecar — Context
+
 Quick-reference for the NaX sidecar work (Option A / Milestone 2). Kept here so it
 doesn't have to be re-derived every session. Last updated 2026-08-21.
 
