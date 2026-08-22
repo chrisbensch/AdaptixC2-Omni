@@ -68,7 +68,7 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   the "builder not up yet" message (not a crash).
 
 ## If I need a fresh session
-- **Now on:** **Task 6 + Task 1 done** —
+- **Now on:** **Task 6 + Task 1 + Task 2 done** —
   - `351d675`: the server-side change `pl_nax_sidecar.go` + the inlined
     request in `pl_build_payload.go` + the `bool` request + 2 tests, all
     passing; the sidecar `replace` is pinned in the submodule's `go.mod`.
@@ -78,6 +78,9 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
     `go.mod` + `go.sum` + the `naxbuilder/` files (`request`, `frame`,
     `pe`, `build`, `worker` + tests) + `cmd/nax-builder/main.go`. Build is
     green (4.1M), `TestComponentPath` pass, vet clean.
+  - **Task 2**: **the framing** (4-byte big-endian length + JSON, `MaxFrameBytes`
+    = `256<<10` cap, the "frame too big" + "short read" errors). `TestFrameRoundTrip`
+    + `TestFrameTooLargeRejected` both pass, vet clean, build green.
 - **Next:** (1) **the sidecar `go test ./naxbuilder/`** (the frame / pe /
   build / worker tests) + **`go build`** the binary, (2) **Dockerfile +
   compose** (the builder stage: pinned NaX + toolchain, its own socket +
