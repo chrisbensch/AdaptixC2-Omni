@@ -68,18 +68,17 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   the "builder not up yet" message (not a crash).
 
 ## If I need a fresh session
-- **Now on:** **Task 6 is built + tested** (the server-side change
-  `pl_nax_sidecar.go` + the inlined request in `pl_build_payload.go` +
-  the `bool` request + 2 tests, all passing; the sidecar replace is
-  pinned in the submodule's `go.mod`). The working patch
-  `patches/adaptix-nax-sidecar-task6.patch` is **done** (512 lines,
-  4 files, forward-applies clean, Kharon intact).
-- **Next:** (1) **commit** the patch + these notes (small), (2) **Tasks
-  1–8** — the sidecar module (`naxbuilder/` request → frame → pe →
-  build → worker, + `cmd/nax-builder/main.go`), (3) **Dockerfile +
-  compose** (the builder stage: pinned NaX + toolchain, its own
-  socket + tmpfs), (4) the **smoke test** (build + run + a build
-  through the socket).
+- **Now on:** **Task 6 is built, tested, + committed** (`351d675`) —
+  the server-side change `pl_nax_sidecar.go` + the inlined request in
+  `pl_build_payload.go` + the `bool` request + 2 tests, all passing; the
+  sidecar `replace` is pinned in the submodule's `go.mod`. The working
+  patch `patches/adaptix-nax-sidecar-task6.patch` is **done** (512
+  lines, 4 files, forward-applies clean, Kharon intact).
+- **Next:** (1) **Tasks 1–8** — the sidecar module (`naxbuilder/`
+  request → frame → pe → build → worker, + `cmd/nax-builder/main.go`),
+  (2) **Dockerfile + compose** (the builder stage: pinned NaX +
+  toolchain, its own socket + tmpfs), (3) the **smoke test** (build +
+  run + a build through the socket).
 
 ## Handful of constants
 - Submodule (AdaptixC2): **bd032d9a**; Nax: **45c5114**; the agent
