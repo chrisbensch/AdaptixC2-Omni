@@ -47,10 +47,12 @@ type NaxBuildRequest struct {
 	BeaconGate   bool   `json:"beaconGate"`
 	EmbedSleep   bool   `json:"embedSleep"` // if true, builder embeds sleepmask .o into Config.h
 
-	// Pre-generated headers (server keeps the pure-Go generators). Base64 of the
-	// exact bytes the old code wrote to src_beacon/include/.
-	ConfigH       []byte `json:"configH"`
-	ConfigProfile []byte `json:"configProfile"`
+	// Pre-generated headers (server keeps the pure-Go generators; the sidecar just
+	// writes them into its copy of the NaX source). Base64 of the exact bytes the
+	// old code wrote to src_beacon/include/.
+	ConfigH            []byte `json:"configH"`             // Config.h (sleepmask embedded if beacongate)
+	ConfigProfileH     []byte `json:"configProfileH"`    // Config_profile.h
+	ConfigSleepmaskH   []byte `json:"configSleepmaskH,omitempty"` // Config_sleepmask.h (if beacongate)
 }
 
 // NaxBuildResponse carries the raw payload components back to the server, which
