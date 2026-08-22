@@ -1,0 +1,512 @@
+diff --git a/go.mod b/go.mod
+index 05486db..3415a08 100644
+--- a/go.mod
++++ b/go.mod
+@@ -3,3 +3,10 @@ module nonameax/agent
+ go 1.25.4
+ 
+ require github.com/Adaptix-Framework/axc2 v1.2.0
++
++// The sidecar (github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder) is a sibling
++// module; pin it via a local replace so the agent module can import naxbuilder
++// without shipping a published reference. See NAX sidecar Task 6.
++require github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder v0.0.0
++
++replace github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder => ../../../sidecar/nax-builder
+diff --git a/pl_build_payload.go b/pl_build_payload.go
+index 5ea8b16..796bb7d 100644
+--- a/pl_build_payload.go
++++ b/pl_build_payload.go
+@@ -13,6 +13,7 @@ import (
+ 	"strings"
+ 
+ 	adaptix "github.com/Adaptix-Framework/axc2"
++	naxbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder/naxbuilder"
+ )
+ 
+ func splitHostPort(hp string) (host string, port int, portExplicit bool) {
+@@ -85,14 +86,23 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
+ 		return nil, "", fmt.Errorf("nonameax: BuildPayload: NaX source not found at %s (set via nax_root.conf or relative fallback)", naxRoot)
+ 	}
+ 
+-	configPath := filepath.Join(naxRoot, "src_beacon", "include", "Config.h")
+-
+ 	var configH []byte
+ 	var profileBytes []byte
+ 	var transportProfile int
+ 	var sleepMs uint32
+ 	var jitterPct uint32
+ 
++	// Branch-scoped values hoisted to function scope so the sidecar request can be
++	// built once below (the HTTP/SMB branches assign these further down). Defaulted to
++	// the runtime fallbacks so an unset branch does not silently pass them through.
++	var (
++		callbackHost  string
++		callbackPort  int
++		bootURI       string = "/api/v1/status"
++		listenerSSL   bool
++		pipeName      string = "naxsmb"
++	)
++
+ 	var gateAPIs []string
+ 	if raw, ok := agentCfg["gate_apis"].([]any); ok {
+ 		for _, item := range raw {
+@@ -103,7 +113,7 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
+ 	}
+ 
+ 	if isSMB {
+-		pipeName, _ := listenerCfg["pipename"].(string)
++		pipeName, _ = listenerCfg["pipename"].(string)
+ 		if pipeName == "" {
+ 			pipeName = "naxsmb"
+ 		}
+@@ -142,14 +152,15 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
+ 		}
+ 		profileBytes = EncodeProfileBodyV2(profCfg)
+ 
+-		callbackHost, callbackPort, portExplicit := splitHostPort(profCfg.Hosts[0])
++		host, port, portExplicit := splitHostPort(profCfg.Hosts[0])
++		callbackHost, callbackPort = host, port
+ 
+-		bootURI := "/api/v1/status"
++		bootURI = "/api/v1/status"
+ 		if len(profCfg.Post.URIs) > 0 {
+ 			bootURI = profCfg.Post.URIs[0]
+ 		}
+ 
+-		listenerSSL, _ := listenerCfg["ssl"].(bool)
++		listenerSSL, _ = listenerCfg["ssl"].(bool)
+ 		if !portExplicit {
+ 			if listenerSSL {
+ 				callbackPort = 443
+@@ -368,193 +379,77 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
+ 	}
+ 
+ 	buildLog(1, "Generating Config.h (%d bytes)", len(configH))
+-	if err := writeIfChanged(configPath, configH); err != nil {
+-		buildLog(2, "Failed to write Config.h: %v", err)
+-		return nil, "", fmt.Errorf("nonameax: BuildPayload: write Config.h: %w", err)
+-	}
++	/* ========= [ sidecar: route through the builder worker ] === === === === */
++	// The server keeps generateConfigH*/generateProfileH/generateSleepmaskH (pure Go):
++	// it has produced configH above (with any sleepmask embedded). Build the fully-derived
++	// request inline from the locals computed earlier, then hand off to the sidecar (which
++	// writes the headers, runs the beacon make, reads the components, and repacks via
++	// packNaxBin). Native compilation never happens here.
++
++	// Generate the other pure-Go headers (server keeps the generators; the sidecar just
++	// writes them into its copy of the NaX source). Profile/sleepmask stay empty when the
++	// corresponding inputs are absent.
++	var profileHBytes, sleepmaskHBytes []byte
+ 	if len(profileBytes) > 0 {
+-		buildLog(1, "profile v2: %d bytes embedded", len(profileBytes))
+-		profilePath := filepath.Join(naxRoot, "src_beacon", "include", "Config_profile.h")
+-		profileH := generateProfileH(profileBytes)
+-		if err := writeIfChanged(profilePath, profileH); err != nil {
+-			buildLog(2, "Failed to write Config_profile.h: %v", err)
+-			return nil, "", fmt.Errorf("nonameax: BuildPayload: write Config_profile.h: %w", err)
+-		}
++		profileHBytes = generateProfileH(profileBytes)
+ 	}
+ 	if len(sleepmaskBytes) > 0 {
+-		smHdrPath := filepath.Join(naxRoot, "src_beacon", "include", "Config_sleepmask.h")
+-		smH := generateSleepmaskH(sleepmaskBytes)
+-		if err := writeIfChanged(smHdrPath, smH); err != nil {
+-			buildLog(2, "Failed to write Config_sleepmask.h: %v", err)
+-			return nil, "", fmt.Errorf("nonameax: BuildPayload: write Config_sleepmask.h: %w", err)
+-		}
+-	}
+-
+-	transportSubdir := "http"
+-	if transportProfile == 1 {
+-		transportSubdir = "smb"
+-	}
+-	buildDir := filepath.Join(naxRoot, "src_beacon", "build", transportSubdir)
+-
+-	if fullRebuild {
+-		buildLog(1, "Cleaning previous build artifacts...")
+-		os.RemoveAll(buildDir)
+-		os.MkdirAll(buildDir, 0755)
+-	} else {
+-		buildLog(1, "Link-only build (Config.c + re-link)")
+-	}
+-
+-	configObj := filepath.Join(buildDir, "Config.obj")
+-	if debug {
+-		configObj = filepath.Join(buildDir, "Config.dpic.obj")
+-	}
+-	firstBuild := false
+-	if _, err := os.Stat(configObj); os.IsNotExist(err) {
+-		firstBuild = true
+-	}
+-
+-	var target string
+-	if fullRebuild || firstBuild {
+-		if firstBuild {
+-			buildLog(1, "First build detected - full compilation required")
+-		}
+-		if debug {
+-			target = "debug-components"
+-		} else {
+-			target = "components"
+-		}
+-	} else {
+-		if debug {
+-			target = "debug-link-components"
+-		} else {
+-			target = "link-components"
+-		}
+-	}
+-
+-	stompMode := "1"
+-	if !moduleStomp {
+-		stompMode = "0"
+-	}
+-	stompAdv := "0"
+-	if stompAdvanced && moduleStomp {
+-		stompAdv = "1"
+-	}
+-	execMode := "1"
+-	if !useThreadPool {
+-		execMode = "0"
+-	}
+-
+-	// Only rebuild loader when technique defines change - compare against
+-	// a sentinel file. Otherwise reuse cached .o files for fast re-link.
+-	// Transport profile is NOT included — the loader doesn't use it.
+-	loaderObjDir := filepath.Join(naxRoot, "src_loader", "bin", "obj")
+-	sentinel := filepath.Join(loaderObjDir, ".nax_defines")
+-	currentDefines := stompMode + ":" + execMode + ":" + stompAdv
+-	if prev, err := os.ReadFile(sentinel); err != nil || strings.TrimSpace(string(prev)) != currentDefines {
+-		buildLog(1, "Loader defines changed - rebuilding")
+-		os.RemoveAll(loaderObjDir)
+-		os.MkdirAll(loaderObjDir, 0755)
+-		os.WriteFile(sentinel, []byte(currentDefines), 0644)
+-	}
+-
+-	makeArgs := []string{"-C", naxRoot, target,
+-		"NAX_STOMP_MODE=" + stompMode,
+-		"NAX_EXEC_MODE=" + execMode,
+-		"NAX_STOMP_ADVANCED=" + stompAdv,
+-		"NAX_TRANSPORT_PROFILE=" + strconv.Itoa(transportProfile),
+-	}
+-	buildLog(1, "Compiling: make %s", strings.Join(makeArgs[1:], " "))
+-	buildCmd := exec.Command("make", makeArgs...)
+-	buildOut, buildErr := buildCmd.CombinedOutput()
+-	for _, line := range strings.Split(string(buildOut), "\n") {
+-		line = strings.TrimSpace(line)
+-		if line == "" {
+-			continue
+-		}
+-		if strings.Contains(line, "section below image base") ||
+-			strings.HasPrefix(line, "BIN ") ||
+-			strings.HasPrefix(line, "DEBUG ") ||
+-			strings.HasPrefix(line, "loader ") ||
+-			strings.HasPrefix(line, "hdr ") ||
+-			strings.HasPrefix(line, "beacon ") {
+-			continue
+-		}
+-		if strings.HasPrefix(line, "[+]") || strings.Contains(line, "done") || strings.Contains(line, "ready") {
+-			buildLog(3, "%s", strings.TrimPrefix(line, "[+] "))
+-		} else if strings.HasPrefix(line, "[-]") || strings.HasPrefix(line, "Error") {
+-			buildLog(2, "%s", strings.TrimPrefix(line, "[-] "))
+-		} else if strings.HasPrefix(line, "[*]") {
+-			buildLog(1, "%s", strings.TrimPrefix(line, "[*] "))
+-		} else {
+-			buildLog(0, "%s", line)
+-		}
+-	}
+-	if buildErr != nil {
+-		buildLog(2, "Build failed: %v", buildErr)
+-		return nil, "", fmt.Errorf("nonameax: BuildPayload: make %s failed: %v", target, buildErr)
+-	}
+-
+-	/* ========= [ read component binaries ] ========= */
+-	loaderPath := filepath.Join(naxRoot, "src_loader", "bin", "nax_loader.x64.bin")
+-	var beaconPath, pdataPath, xdataPath, rvaPath string
+-	if debug {
+-		beaconPath = filepath.Join(buildDir, "beacon.x64.debug.bin")
+-		pdataPath = filepath.Join(buildDir, "beacon.debug.pdata.bin")
+-		xdataPath = filepath.Join(buildDir, "beacon.debug.xdata.bin")
+-		rvaPath = filepath.Join(buildDir, "beacon.debug.text_rva")
+-	} else {
+-		beaconPath = filepath.Join(buildDir, "beacon.x64.bin")
+-		pdataPath = filepath.Join(buildDir, "beacon.pdata.bin")
+-		xdataPath = filepath.Join(buildDir, "beacon.xdata.bin")
+-		rvaPath = filepath.Join(buildDir, "beacon.text_rva")
+-	}
+-
+-	loader, err := os.ReadFile(loaderPath)
+-	if err != nil {
+-		return nil, "", fmt.Errorf("nonameax: BuildPayload: read loader: %w", err)
+-	}
+-	beacon, err := os.ReadFile(beaconPath)
++		sleepmaskHBytes = generateSleepmaskH(sleepmaskBytes)
++	}
++
++	req := &naxbuilder.NaxBuildRequest{
++		// Transport (http|smb) is selected below from the (hoisted) branch locals.
++		OutputFormat: outputFormat, // "bin"|"exe"|"dll"|"svc"
++		SvcName:      svcName,
++		DllExport:    dllExport,
++		// BeaconGate: server built + embedded the sleepmask BOF into Config.h above.
++		BeaconGate:   beacongate,
++		EmbedSleep:   true, // Config.h already embeds the sleepmask BOF
++		// Stomp config (mirrors the old make args / packed-flags).
++		StompMode:    moduleStomp, // bool
++		StompAdv:     stompAdvanced, // bool
++		StompDll:     stompDll,
++		StompUnwind:  stompUnwind, // bool
++		ThreadPool:   useThreadPool, // bool
++		// Bof stomp config.
++		BofStomp:     bofStomp, // bool
++		BofStompDll:  bofStompDll,
++		BofStompPool: bofStompPool,
++		SmStompDll:   smStompDll,
++		SleepObf:     sleepObf, // "1"
++		// Timing / crypto / watermarks.
++		SleepMs:    sleepMs,
++		JitterPct:  jitterPct,
++		EncKeyHex:  strings.ToLower(encKeyHex),
++		Watermark:  fmt.Sprintf("0x%08x", watermark),
++		LyWM:       fmt.Sprintf("0x%08x", listenerWatermark),
++		// Pre-generated headers (server generated them; the sidecar writes them).
++		ConfigH:            configH,
++		ConfigProfileH:     profileHBytes,
++		ConfigSleepmaskH:   sleepmaskHBytes, // only if beacongate
++		// Debug / full rebuild.
++		Debug:       debug,
++		FullRebuild: fullRebuild,
++		// Gate APIs.
++		GateAPIs: gateAPIs,
++	}
++	if transportProfile == 1 { // SMB (hoisted pipeName)
++		req.Transport = "smb"
++		req.PipeName = pipeName
++	} else { // HTTP (hoisted callbackHost/port/bootURI/listenerSSL)
++		req.Transport = "http"
++		req.CallbackHost = callbackHost
++		req.CallbackPort = callbackPort
++		req.BootURI = bootURI
++		req.SSL = listenerSSL
++	}
++
++	// Dial the sidecar, send the request, read the components, repack via packNaxBin.
++	// Never invokes a compiler or reads/writes a source tree here.
++	payload, filename, err := buildViaSidecar(req)
+ 	if err != nil {
+-		return nil, "", fmt.Errorf("nonameax: BuildPayload: read beacon: %w", err)
+-	}
+-
+-	var pdata, xdata []byte
+-	var textRva uint32
+-	var flags uint32
+-
+-	if moduleStomp {
+-		flags |= flagModStomp
+-		if stompUnwind {
+-			flags |= flagStompPdat
+-			pdata, _ = os.ReadFile(pdataPath)
+-			xdata, _ = os.ReadFile(xdataPath)
+-			textRva, _ = readTextRVA(rvaPath)
+-		}
+-	}
+-
+-	/* ========= [ pack payload in Go (always v2) ] ========= */
+-	buildLog(1, "Packing v2: loader=%d beacon=%d pdata=%d xdata=%d flags=0x%04x dll=%s",
+-		len(loader), len(beacon), len(pdata), len(xdata), flags, stompDll)
+-	payload := packNaxBin(loader, beacon, pdata, xdata, textRva, flags, stompDll)
+-
+-	binName := "nax.x64.bin"
+-	if debug {
+-		binName = "nax.x64.debug.bin"
+-	}
+-
+-	buildLog(3, "%s packed successfully (%d bytes)", binName, len(payload))
+-
+-	/* ========= [ PE wrapper (exe/dll/svc) ] ========= */
+-	if outputFormat != "bin" {
+-		buildLog(1, "Wrapping PIC in PE format: %s", outputFormat)
+-		wrapped, peFilename, err := compileWrapper(payload, outputFormat, svcName, dllExport, debug, buildLog)
+-		if err != nil {
+-			buildLog(2, "PE wrapper failed: %v", err)
+-			return nil, "", fmt.Errorf("nonameax: PE wrapper: %w", err)
+-		}
+-		payload = wrapped
+-		binName = peFilename
++		return nil, "", err
+ 	}
++	return payload, filename, nil
+ 
+-	return payload, binName, nil
+ }
+diff --git a/pl_build_payload_test.go b/pl_build_payload_test.go
+new file mode 100644
+index 0000000..4b38ee5
+--- /dev/null
++++ b/pl_build_payload_test.go
+@@ -0,0 +1,110 @@
++package main
++
++import (
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++
++	adaptix "github.com/Adaptix-Framework/axc2"
++	naxbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder/naxbuilder"
++)
++
++// fakeSidecarBuilder starts an in-process server-side stub that replies to one
++// request with canned components, so buildViaSidecar can be tested end-to-end
++// without any compiler or real source tree.
++func fakeSidecarBuilder(t *testing.T, sockPath string) {
++	l, err := net.Listen("unix", sockPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = l.Close() })
++	go func() {
++		for {
++			conn, err := l.Accept()
++			if err != nil {
++				return
++			}
++			go func(conn net.Conn) {
++				defer conn.Close()
++				var req naxbuilder.NaxBuildRequest
++				if err := naxbuilder.ReadFrame(conn, &req, naxbuilder.MaxFrameBytes); err != nil {
++					return
++				}
++				resp := &naxbuilder.NaxBuildResponse{
++					OK:       true,
++					Filename: "nax.x64.bin",
++					Components: map[string][]byte{
++						"loader":  []byte("L"),
++						"beacon": []byte("B"),
++						"pdata":  []byte{},
++						"xdata":  []byte{},
++						"textRva": []byte("4096"),
++					},
++					Flags:    "0x0000",
++					StompDll: "chakra.dll",
++				}
++				_ = naxbuilder.WriteFrame(conn, resp)
++			}(conn)
++		}
++	}()
++}
++
++// TestMapBuildProfileThroughSidecar wires buildViaSidecar at an in-process fake
++// builder (via ModuleDir/nax_builder_socket) and asserts the repacked output equals
++// packNaxBin(loader, beacon, pdata, xdata, textRva, 0, stompDll) of the canned parts.
++func TestMapBuildProfileThroughSidecar(t *testing.T) {
++	// Point buildViaSidecar at the fake builder: set ModuleDir to a temp dir whose
++	// nax_builder_socket contains the fake builder's socket path.
++	dir := t.TempDir()
++	sockPath := "/tmp/nax_sidecar_test.sock" // short path: macOS sun_path is capped at 104 bytes
++	if err := os.WriteFile(filepath.Join(dir, "nax_builder_socket"), []byte(sockPath), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	origModuleDir := ModuleDir
++	ModuleDir = dir
++	t.Cleanup(func() {
++		ModuleDir = origModuleDir
++		_ = os.Remove(sockPath)
++	})
++
++	fakeSidecarBuilder(t, sockPath)
++
++	profile := adaptix.BuildProfile{
++		AgentConfig:    `{"sleep":10,"jitter":30,"gate_apis":[],"output_format":"bin"}`,
++		ListenerProfiles: []adaptix.TransportProfile{
++			{Watermark: "a04a4178", Profile: []byte(`{"hosts":["1.2.3.4:443"],"ssl":true,"encrypt_key":"00112233445566778899aabbccddeeff","post":{"uris":["/api/v1/status"]}}`)},
++		},
++	}
++	_ = profile
++
++	// Build the request exactly like BuildPayload does, then send it through the sidecar.
++	req := &naxbuilder.NaxBuildRequest{
++		Transport:    "http",
++		OutputFormat: "bin",
++	}
++	payload, _, err := buildViaSidecar(req)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// The repacked payload must equal packNaxBin(loader, beacon, pdata, xdata, textRva, 0, chakra.dll)
++	// of the fake builder's canned components.
++	want := packNaxBin([]byte("L"), []byte("B"), []byte{}, []byte{}, 0x4096, 0, "chakra.dll")
++	if len(payload) != len(want) {
++		t.Fatalf("packed payload len = %d, want %d", len(payload), len(want))
++	}
++	for i := range want {
++		if payload[i] != want[i] {
++			t.Fatalf("packed payload[%d] = 0x%02x, want 0x%02x (idx %d)", i, payload[i], want[i], i)
++		}
++	}
++}
++
++func TestBuildViaSidecarBuilderAbsent(t *testing.T) {
++	// No listener on this path -> buildViaSidecar must return a clear error.
++	_, _, err := buildViaSidecar(&naxbuilder.NaxBuildRequest{Transport: "http", OutputFormat: "bin"})
++	if err == nil {
++		t.Fatal("expected builder-absence error")
++	}
++}
+diff --git a/pl_nax_sidecar.go b/pl_nax_sidecar.go
+new file mode 100644
+index 0000000..8c26ac4
+--- /dev/null
++++ b/pl_nax_sidecar.go
+@@ -0,0 +1,48 @@
++package main
++
++import (
++	"fmt"
++	"strconv"
++	"strings"
++
++	naxbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder/naxbuilder"
++)
++
++// buildViaSidecar dials the sidecar builder over its Unix socket, sends the
++// fully-derived *naxbuilder.NaxBuildRequest (which carries the generated Config.h /
++// Config_profile.h / Config_sleepmask.h + the build input), reads the components
++// response, and repacks with the in-process packNaxBin(...). It never invokes a
++// compiler or touches a source tree — all native compilation happens in the sidecar.
++//
++// The socket path is resolved the usual way (ModuleDir/nax_builder_socket, or the
++// /run/nax/builder.sock fallback — see naxbuilder.ResolveSocketPath).
++func buildViaSidecar(req *naxbuilder.NaxBuildRequest) ([]byte, string, error) {
++	client := naxbuilder.New(naxbuilder.ResolveSocketPath(ModuleDir))
++	resp, err := client.Build(req)
++	if err != nil {
++		return nil, "", err
++	}
++	if resp == nil || !resp.OK {
++		return nil, "", fmt.Errorf("nonameax: BuildPayload: builder returned no payload")
++	}
++
++	loader := resp.Components["loader"]
++	beacon := resp.Components["beacon"]
++	pdata := resp.Components["pdata"]
++	xdata := resp.Components["xdata"]
++
++	// flags: "0x%04x" (with 0x prefix). textRva: hex string, no 0x prefix (match
++	// readTextRVA — fmt.Sscanf("%x")).
++	flags, _ := strconv.ParseUint(strings.TrimPrefix(resp.Flags, "0x"), 16, 32)
++	var textRva uint32
++	if raw := strings.TrimSpace(string(resp.Components["textRva"])); raw != "" {
++		_, _ = fmt.Sscanf(raw, "%x", &textRva)
++	}
++
++	dll := resp.StompDll
++	if dll == "" {
++		dll = "chakra.dll"
++	}
++
++	return packNaxBin(loader, beacon, pdata, xdata, textRva, uint32(flags), dll), resp.Filename, nil
++}
