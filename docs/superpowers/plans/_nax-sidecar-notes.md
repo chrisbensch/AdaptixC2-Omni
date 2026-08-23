@@ -68,7 +68,7 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   the "builder not up yet" message (not a crash).
 
 ## If I need a fresh session
-- **Now on:** **Task 6 + Task 1 + Task 2 done** —
+- **Now on (re-verified green, Aug 23):** **Task 6 + Task 1 + Task 2 done** —
   - `351d675`: the server-side change `pl_nax_sidecar.go` + the inlined
     request in `pl_build_payload.go` + the `bool` request + 2 tests, all
     passing; the sidecar `replace` is pinned in the submodule's `go.mod`.
@@ -81,11 +81,15 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   - **Task 2**: **the framing** (4-byte big-endian length + JSON, `MaxFrameBytes`
     = `256<<10` cap, the "frame too big" + "short read" errors). `TestFrameRoundTrip`
     + `TestFrameTooLargeRejected` both pass, vet clean, build green.
-- **Next:** (1) **the sidecar `go test ./naxbuilder/`** (the frame / pe /
-  build / worker tests) + **`go build`** the binary, (2) **Dockerfile +
-  compose** (the builder stage: pinned NaX + toolchain, its own socket +
-  tmpfs), (3) the **smoke test** (build + run + a build through the
-  socket).
+  - **Aug 23 re-check (live, on this machine):** sidecar `go vet ./...` clean,
+    `go test ./...` pass in **0.386s**, binary builds green at **4.1M**. NaX's
+    4 files in `src_server/agent_nonameax/` are **uncommitted** (the `replace`
+    is in its `go.mod`); the workspace sits **14 commits ahead of origin/main**
+    (unpushed). No container running right now — OrbStack daemon is up.
+- **Next:** (2) **Dockerfile + compose** (the builder stage: pinned NaX +
+  toolchain, its own socket + tmpfs), (3) the **smoke test** (build + run +
+  a build through the socket).
+  - (1) — the sidecar `go test` + `go build` — is **done** (Aug 23, all green).
 
 ## Handful of constants
 - Submodule (AdaptixC2): **bd032d9a**; Nax: **45c5114**; the agent
@@ -111,7 +115,8 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
 - [ ] A Nax agent's payload builds **through the builder** (no
   in-server `go build`), and **Kharon stays in its own build** —
   side by side.
-- [ ] A unit test or two on the new pieces.
+- [x] A unit test or two on the new pieces. (frame / pe / build / worker
+      in the sidecar + the 110-line `pl_build_payload_test.go` in NaX)
 - [ ] The **smoke test** (the run-side check) — the server + builder
   live, and a build goes through the socket.
 - [ ] The `data/` dir is back to its write-ability (the
