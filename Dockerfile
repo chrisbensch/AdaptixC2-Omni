@@ -125,6 +125,16 @@ RUN rm -f /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax/Makefile \
           /src/AdaptixC2/AdaptixServer/extenders/listener_nonameax_smb/Makefile \
           /src/AdaptixC2/AdaptixServer/extenders/service_nax_store/Makefile
 
+# Apply the Nax sidecar integration patch. It routes agent_nonameax's BuildPayload
+# through the builder sidecar (dial /run/nax/builder.sock) instead of doing native
+# compilation in-server. Patch paths are relative to the NaX submodule root
+# (src_server/agent_nonameax/<file>); -p2 drops the a/ prefix + src_server/ so the
+# files land in extendsers/agent_nonameax/. `patch` (not `git apply`) is used the
+# same way as the Kharon patch below. Applied before `go work sync` so the patched
+# go.mod's sidecar require/replace is resolved into the workspace.
+RUN cd /src/AdaptixC2/AdaptixServer/extenders && \
+    patch -p2 --verbose < /src/patches/adaptix-nax-sidecar-task6.patch
+
 # Apply Kharon BOF mingw-w64 Bookworm compatibility patch. The
 # PROCESS_MITIGATION_USER_POINTER_AUTH_POLICY and SEHOP_POLICY types
 # don't exist in Bookworm's mingw-w64 12.2 — guard them so the core
@@ -140,7 +150,7 @@ RUN cd /src/AdaptixC2/AdaptixServer && \
     go work use ./extenders/agent_kharon ./extenders/listener_kharon_http \
                 ./extenders/agent_nonameax ./extenders/listener_nonameax_http \
                 ./extenders/listener_nonameax_smb ./extenders/service_nax_store \
-                ../../sidecar/nax-builder && \
+                ../sidecar/nax-builder && \
     go work sync
 
 # Build adaptixserver + every extender plugin (default 7 + Kharon 2 = 9).

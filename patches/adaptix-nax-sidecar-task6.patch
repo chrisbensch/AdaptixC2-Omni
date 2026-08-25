@@ -1,7 +1,7 @@
-diff --git a/go.mod b/go.mod
+diff --git a/src_server/agent_nonameax/go.mod b/src_server/agent_nonameax/go.mod
 index 05486db..3415a08 100644
---- a/go.mod
-+++ b/go.mod
+--- a/src_server/agent_nonameax/go.mod
++++ b/src_server/agent_nonameax/go.mod
 @@ -3,3 +3,10 @@ module nonameax/agent
  go 1.25.4
  
@@ -13,10 +13,10 @@ index 05486db..3415a08 100644
 +require github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder v0.0.0
 +
 +replace github.com/entropy-z/AdaptixC2-Omni/sidecar/nax-builder => ../../../sidecar/nax-builder
-diff --git a/pl_build_payload.go b/pl_build_payload.go
+diff --git a/src_server/agent_nonameax/pl_build_payload.go b/src_server/agent_nonameax/pl_build_payload.go
 index 5ea8b16..796bb7d 100644
---- a/pl_build_payload.go
-+++ b/pl_build_payload.go
+--- a/src_server/agent_nonameax/pl_build_payload.go
++++ b/src_server/agent_nonameax/pl_build_payload.go
 @@ -13,6 +13,7 @@ import (
  	"strings"
  
@@ -340,11 +340,11 @@ index 5ea8b16..796bb7d 100644
  
 -	return payload, binName, nil
  }
-diff --git a/pl_build_payload_test.go b/pl_build_payload_test.go
+diff --git a/src_server/agent_nonameax/pl_build_payload_test.go b/src_server/agent_nonameax/pl_build_payload_test.go
 new file mode 100644
 index 0000000..4b38ee5
 --- /dev/null
-+++ b/pl_build_payload_test.go
++++ b/src_server/agent_nonameax/pl_build_payload_test.go
 @@ -0,0 +1,110 @@
 +package main
 +
@@ -456,11 +456,11 @@ index 0000000..4b38ee5
 +		t.Fatal("expected builder-absence error")
 +	}
 +}
-diff --git a/pl_nax_sidecar.go b/pl_nax_sidecar.go
+diff --git a/src_server/agent_nonameax/pl_nax_sidecar.go b/src_server/agent_nonameax/pl_nax_sidecar.go
 new file mode 100644
 index 0000000..8c26ac4
 --- /dev/null
-+++ b/pl_nax_sidecar.go
++++ b/src_server/agent_nonameax/pl_nax_sidecar.go
 @@ -0,0 +1,48 @@
 +package main
 +

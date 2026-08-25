@@ -68,6 +68,56 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   the "builder not up yet" message (not a crash).
 
 ## If I need a fresh session
+### This session (Dockerfile/compose wiring + patch approach)
+- **Decision: NaX submodule changes go in `patches/`, NOT committed inside the
+  submodule.** Repo rule (AGENTS.md): don't commit inside submodule trees;
+  persistent customizations go in `patches/` or Dockerfile-side at COPY time.
+  So the 4 NaX files in `NaX/src_server/agent_nonameax/` (`go.mod`,
+  `pl_build_payload.go`, new `pl_build_payload_test.go`, new `pl_nax_sidecar.go`)
+  are captured as a **patch**, applied at build time. The NaX submodule working
+  tree is restored to its pinned SHA (clean) — the changes live only in the patch.
+- **Patch:** `patches/adaptix-nax-sidecar-task6.patch` — regenerated with
+  **FULL paths relative to the NaX submodule root** (`src_server/agent_nonameax/...`),
+  matching repo convention (kharon/go-dependencies patches do the same). It
+  forward-applies clean.
+- **Patch application (Dockerfile, build-server stage):** applied AFTER
+  `COPY NaX/src_server/agent_nonameax /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax`
+  and BEFORE `go work sync`, so the patched go.mod's sidecar `replace` is picked
+  up by `go work sync`. Uses **`patch -p2`** (not `git apply`) from cwd
+  `/src/AdaptixC2/AdaptixServer/extenders` — this is the repo convention
+  (kharon uses `patch -p2`). `-p2` strips the `a/` prefix + `src_server/`, landing
+  files in `extenders/agent_nonameax/`. NOTE: `-p1` from the parent dir and
+  `patch -p2` from *inside* agent_nonameax both mis-strip — verified by hand.
+- **Dockerfile changes (committed `d36bff6`):**
+  - `COPY sidecar /src/AdaptixC2/sidecar` (the sidecar source the agent's
+    `replace` resolves to).
+  - `go work use ... ../sidecar/nax-builder` — **path is `../sidecar/...`, NOT
+    `../../sidecar/...`**. cwd is `/src/AdaptixC2/AdaptixServer`; the sidecar is
+    at `/src/AdaptixC2/sidecar/nax-builder` (one `..`, not two). This was a bug
+    I introduced and fixed this session.
+  - `groupadd naxb` (GID 10002) + `usermod -a -G naxb adaptix` so the server
+    (UID 10001) can dial the builder's socket.
+  - Removed the server image shipping `/app/NaX` source tree (now only in the
+    builder image).
+- **Compose fix (`docker-compose.yml`, committed `f971492`):** the two
+  per-container `/run/nax` **tmpfs** mounts were private — the socket the
+  builder wrote was never visible to the server. Replaced with a shared **named
+  volume `nax-sock`** mounted at `/run/nax` in both `server` and `nax-builder`
+  services. Added top-level `volumes: nax-sock:`.
+- **Builder socket mode (`sidecar/nax-builder/naxbuilder/worker.go`, committed
+  `f971492`):** `net.Listen` creates the socket `0o755` (no group write), which
+  blocks connect() for the non-owner server. Added a best-effort `os.Chmod(sock,
+  0o660)` after bind so the server (in the `naxb` group) can connect.
+- **Current blocker (Aug 24): `go work sync` fails in the container** even after
+  the path fix. Real build (not `--check`) of `build-server` dies at step 14/24:
+  `go: open /src/NaX/src_server/agent_nonameax/go.mod: no such file or directory`
+  and `go: open /src/sidecar/nax-builder/go.mod: no such file or directory`. The
+  `go work use ./extenders/agent_nonameax` + `../sidecar/nax-builder` line is
+  resolving to paths that don't exist in the container. **Not yet diagnosed** —
+  likely a `replace` directive in AdaptixC2's go.mod redirecting the module path,
+  or the sidecar/agent aren't where `go work use` expects. The patch itself
+  applies cleanly (verified: all 4 files). See `docker build --no-cache
+  --target build-server .` to reproduce.
 - **Now on (re-verified green, Aug 23):** **Task 6 + Task 1 + Task 2 done** —
   - `351d675`: the server-side change `pl_nax_sidecar.go` + the inlined
     request in `pl_build_payload.go` + the `bool` request + 2 tests, all
@@ -111,8 +161,12 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   `replace .../sidecar/nax-builder => ../../../sidecar/nax-builder`.
 - **The build recipe** (the per-extender Makefile): the
   `-buildmode=plugin` `ldflags -s -w`.
-- **The root tmpfs is shared** (`/run/nax`) — the builder's fresh
-  workspace + the socket both live there.
+- **The root socket dir is a shared named volume** (`nax-sock`, mounted at
+  `/run/nax`) — NOT a tmpfs. Two per-container tmpfs mounts are private, so the
+  socket the builder wrote was never visible to the server. The builder writes
+  its unix socket there (chmod'd `0o660` so the server, in the `naxb` group,
+  can connect); the server dials it. See `docker-compose.yml` +
+  `sidecar/nax-builder/naxbuilder/worker.go`.
 - **The build server image** (for the smoke run): the same
   `golang:1.25.12-bookworm` pin.
 - **The protocol:** the 4-byte big-endian length + JSON body;
