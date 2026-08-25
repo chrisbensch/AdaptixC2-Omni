@@ -1,0 +1,29 @@
+Wire the Nax agent + sidecar into the AdaptixServer workspace (go.work).
+
+The Nax server plugin (NaX/src_server/agent_nonameax) resolves the sidecar
+builder through a local replace in its go.mod: the module path
+sidecar/nax-builder is pinned to ../../../sidecar/nax-builder. Listing both
+the Nax agent and the sidecar in go.work's use list makes the Go toolchain
+(and `go work sync`) resolve that replacement.
+
+go.work is not tracked in the AdaptixC2 submodule commit, so it is generated
+in the Docker build stage by `go work use ... && go work sync` (see the
+build-server stage). This patch therefore targets an EXISTING go.work
+(e.g. after `go work init` or a prior build) — the local-build / manual-checkout
+path. It reproduces, verbatim, the entries that stage adds inline, so the two
+stay in sync.
+
+diff --git a/AdaptixServer/go.work b/AdaptixServer/go.work
+index 0000000..0000000
+--- a/AdaptixServer/go.work
++++ b/AdaptixServer/go.work
+@@ -9,4 +9,9 @@
+ 	./extenders/beacon_listener_tcp
+ 	./extenders/gopher_agent
+ 	./extenders/gopher_listener_tcp
++	// Nax agent module (submodule) — payload generation now talks to the
++	// sidecar builder over a unix socket. Its go.mod pins the sidecar via a
++	// local replace, so both this module and the sidecar are listed here.
++	../../NaX/src_server/agent_nonameax
++	../../sidecar/nax-builder
+ )

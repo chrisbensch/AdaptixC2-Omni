@@ -1,0 +1,96 @@
+# syntax=docker/dockerfile:1.7
+#
+# Nax builder sidecar image (Milestone 2).
+#
+# The Nax agent (in the teamserver) sends a build request over a unix socket;
+# this image owns the actual compilation. It carries its own pinned NaX source
+# + cross-compile toolchain, so the teamserver image stays lean — no NaX source
+# tree and no compiler in the server image (the toolchain fully leaves in
+# Milestone 3 once Kharon moves over too).
+#
+# Layout:
+#   /nax            the pinned NaX source tree (Makefile + src_* + the agent's
+#                    pe_templates/). The worker `make components`/link-components
+#                    writes the raw component files here, then reads them back.
+#   /nax-builder   the static worker binary (one request/response per connection)
+#   /run/nax       the shared socket dir (a named volume in compose). The worker
+#                    writes the unix socket here; the teamserver dials it.
+#
+# Build context: workspace root (same as the main Dockerfile).
+# The builder does NOT talk to the outside network (network_mode: none in
+# compose) — only the shared /run/nax volume carries the socket to the teamserver.
+
+# ============================================
+# Stage: build — compile the nax-builder worker binary
+# ============================================
+# Same pinned golang base as the main Dockerfile. The cross-compile toolchain
+# lives in the runtime stage below, so the build stage stays lean and fast.
+FROM golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GOEXPERIMENT=jsonv2,greenteagc
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        make \
+        build-essential \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY sidecar /src/sidecar
+RUN cd /src/sidecar/nax-builder && \
+    go build -ldflags="-s -w" -o /nax-builder ./cmd/nax-builder
+
+# ============================================
+# Stage: runtime — toolchain + pinned NaX source + worker binary
+# ============================================
+# Pinned by digest. Same rationale as the main Dockerfile; bump on refresh.
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Cross-compile toolchain (mingw-w64 PE) + build support. The worker runs
+# `make components`/`link-components` here for the raw component files and
+# invokes x86_64-w64-mingw32-g++ for the PE wrapper (exe/dll/svc).
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        make \
+        binutils \
+        g++-mingw-w64-x86-64 \
+        g++-mingw-w64-i686 \
+        nasm \
+        python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Dedicated non-root UID for the builder (10002; the teamserver is 10001).
+RUN groupadd --system --gid 10002 naxb && \
+    useradd  --system --uid 10002 --gid naxb \
+             --no-create-home --shell /usr/sbin/nologin naxb
+
+WORKDIR /nax
+
+# Pinned NaX source tree (the Makefile + src_beacon/src_loader/src_sleepmask +
+# the agent's pe_templates/). This is the builder's own copy of the pinned NaX
+# submodule — the teamserver image no longer carries the full tree.
+COPY NaX /nax
+
+# Prebuild the invariant beacon/loader .o files at image build, so runtime
+# `make link-components` is seconds not minutes. Same trick as the teamserver's
+# build-server prebuild; non-fatal (a hiccup here shouldn't fail the image).
+RUN cd /nax && \
+    make components NAX_STOMP_MODE=1 NAX_EXEC_MODE=1 \
+    || echo "[!] builder prebuild had warnings (non-fatal)"
+
+# The static worker binary + hand the tree to the builder user.
+COPY --from=build /nax-builder /nax-builder
+RUN chown -R naxb:naxb /nax && chmod 0755 /nax-builder
+
+# The shared /run/nax (the socket) is a named volume in compose (writable there). The
+# worker writes the unix socket into it; the teamserver dials it.
+ENV NAX_SRC=/nax
+ENV NAX_BUILDER_SOCK=/run/nax/builder.sock
+
+ENTRYPOINT ["/nax-builder"]

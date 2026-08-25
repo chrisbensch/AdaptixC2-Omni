@@ -90,6 +90,11 @@ RUN make -C /src/PostEx-Arsenal/bofs
 FROM base AS build-server
 
 COPY AdaptixC2 /src/AdaptixC2
+# The Nax agent plugin (extenders/agent_nonameax) resolves the sidecar builder
+# through a local `replace ... => .../sidecar/nax-builder` in its go.mod, which
+# inside the container expands to /src/AdaptixC2/sidecar/nax-builder. Copy the
+# workspace-root sidecar here so that plugin (and `go work sync`) resolves.
+COPY sidecar /src/AdaptixC2/sidecar
 COPY patches /src/patches
 # Raise fixed Go-module floors in the workspace primary module before Kharon is
 # registered and `go work sync` propagates the selected versions to every plugin.
@@ -129,9 +134,13 @@ RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
     patch -p2 --verbose < /src/patches/kharon-core-mingw-compat.patch
 
 RUN cd /src/AdaptixC2/AdaptixServer && \
+    # Mirror the locally-verified workspace: register every extender, plus the
+    # sidecar (the Nax agent's go.mod resolves it through a local replace, so
+    # listing it makes `go work sync` resolve it explicitly).
     go work use ./extenders/agent_kharon ./extenders/listener_kharon_http \
                 ./extenders/agent_nonameax ./extenders/listener_nonameax_http \
-                ./extenders/listener_nonameax_smb ./extenders/service_nax_store && \
+                ./extenders/listener_nonameax_smb ./extenders/service_nax_store \
+                ../../sidecar/nax-builder && \
     go work sync
 
 # Build adaptixserver + every extender plugin (default 7 + Kharon 2 = 9).
@@ -176,7 +185,13 @@ RUN set -eux; \
     cd /src/AdaptixC2/AdaptixServer/extenders/agent_nonameax && \
     GOEXPERIMENT=jsonv2,greenteagc go build -buildmode=plugin -ldflags="-s -w" \
         -o /src/AdaptixC2/dist/extenders/agent_nonameax/agent_nonameax.so . && \
-    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/agent_nonameax/
+    cp ax_config.axs config.yaml /src/AdaptixC2/dist/extenders/agent_nonameax/ && \
+    # The socket-path file: the server's agent reads this to find the builder's
+    # unix socket on the shared /run/nax volume (the builder writes the socket
+    # there; the server just dials it). Kept as a file so an operator can override
+    # the path by editing it in /app/extenders/agent_nonameax/ without a rebuild.
+    printf '%s' "/run/nax/builder.sock" > \
+        /src/AdaptixC2/dist/extenders/agent_nonameax/nax_builder_socket
 
 RUN set -eux; \
     mkdir -p /src/AdaptixC2/dist/extenders/listener_nonameax_http && \
@@ -244,8 +259,13 @@ RUN apt-get update && \
 # `gosu` before exec'ing the server. /app itself is left root-owned + world-
 # readable so even a write-capable container can't modify the server binary.
 RUN groupadd --system --gid 10001 adaptix && \
+    groupadd --system --gid 10002 naxb && \
     useradd  --system --uid 10001 --gid adaptix \
-             --no-create-home --shell /usr/sbin/nologin adaptix
+             --no-create-home --shell /usr/sbin/nologin adaptix && \
+    # Join the server to the builder's `naxb` group (10002) so it can read the
+    # builder's 0o600 unix socket on the shared /run/nax volume. The server still
+    # runs as 10001/adaptix; naxb is just its socket-reading group.
+    usermod -a -G naxb adaptix
 
 WORKDIR /app
 
@@ -278,13 +298,12 @@ COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src
 COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_core   \
      /app/extenders/agent_kharon/src_core
 
-# NaX runtime compilation source tree. BuildPayload generates Config.h
-# headers, runs `make -C /app/NaX link-components` (with prebuilt .o files
-# from the build-server prebuild), packs payloads in-process via nax_packer.go,
-# and optionally compiles PE wrappers (Exe/Dll/Svc) via x86_64-w64-mingw32-g++.
-# resolveNaxRoot() falls back to ModuleDir/../../../NaX = /app/NaX.
-COPY --from=build-server /src/NaX /app/NaX
-RUN chown -R adaptix:adaptix /app/NaX
+# NaX payload generation now goes through the builder sidecar (the agent .so
+# dials /run/nax/builder.sock; the builder image carries the NaX source tree +
+# cross toolchain and does the make/compile). So the server image no longer ships
+# the full /app/NaX source tree — that lives in the builder image now. The
+# server's own Kharon src trees (below) still compile in-server; the toolchain
+# fully leaves the server in Milestone 3.
 RUN chown -R adaptix:adaptix /app/extenders
 
 # Profile template + Kharon listener template. The runtime profile is rendered

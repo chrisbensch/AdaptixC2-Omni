@@ -15,6 +15,17 @@ import (
 // leave it empty (which yields a clear "pe_templates not found" error).
 var naxRoot = ""
 
+// SetNaxRoot points the worker at the NaX source root (where the Makefile and
+// src_server/agent_nonameax/pe_templates live). Called once at startup; empty
+// falls back to "/nax" (the builder image's layout). The tests override it with
+// a fixture dir.
+func SetNaxRoot(p string) {
+	if p == "" {
+		p = "/nax"
+	}
+	naxRoot = p
+}
+
 // generateShellcodeH renders a PIC shellcode blob as a C++ header with a .text
 // section holding the bytes as hex literals. It mirrors pl_build.go's version;
 // the only deviation is lower-case hex digits, which is cosmetically irrelevant

@@ -90,6 +90,17 @@ _implementation_ goes in the plan (above), the _durable_ context lives here.
   toolchain, its own socket + tmpfs), (3) the **smoke test** (build + run +
   a build through the socket).
   - (1) — the sidecar `go test` + `go build` — is **done** (Aug 23, all green).
+  - Nax **wired into the AdaptixServer workspace**: `AdaptixC2/AdaptixServer/go.work`
+    now lists `../../NaX/src_server/agent_nonameax` + `../../sidecar/nax-builder`.
+    Verified: whole-workspace `go build ./...` green; Nax agent module `go test ./...`
+    pass (0.40s); sidecar `go test ./...` pass; 0 vet issues from Nax/sidecar (the
+    42 warnings are pre-existing upstream `core/` format-string checks).
+  - **Dockerfile fixed** (was a latent break): the Nax agent's `go.mod` resolves the
+    sidecar via `replace ... => .../sidecar/nax-builder`, which inside the container
+    is `/src/AdaptixC2/sidecar/nax-builder` — previously never copied. Added
+    `COPY sidecar /src/AdaptixC2/sidecar` + wired `../../sidecar/nax-builder` into
+    the `go work use` line. `docker build --check --target build-server` → clean
+    (EXIT 0).
 
 ## Handful of constants
 - Submodule (AdaptixC2): **bd032d9a**; Nax: **45c5114**; the agent
