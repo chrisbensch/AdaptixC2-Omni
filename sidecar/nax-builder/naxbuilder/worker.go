@@ -23,6 +23,14 @@ func StartListener(sockPath string) {
 	if err != nil {
 		panic(fmt.Errorf("builder: listen on %q: %w", sockPath, err))
 	}
+	// net.Listen creates the socket file 0o755 (no group write), which blocks
+	// connect() for a non-owner user. The teamserver runs as `adaptix` (UID 10001)
+	// joined to the builder's `naxb` group (GID 10002) and dials this socket over
+	// the shared /run/nax volume, so widen it to 0o660 (owner + naxb group rw).
+	// Best-effort: if the path isn't a regular file (e.g. a symlink race) skip.
+	if fi, err := os.Stat(sockPath); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		_ = os.Chmod(sockPath, 0o660)
+	}
 	defer l.Close()
 	for {
 		conn, err := l.Accept()

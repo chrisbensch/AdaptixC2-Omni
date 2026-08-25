@@ -54,12 +54,59 @@ services:
       # The runtime profile (./data/profile.yaml) is rendered by the entrypoint
       # on first start. Edit it there and `restart` to apply changes.
       - ./data:/app/data
+      # Shared builder socket dir (a NAMED volume, NOT tmpfs — two separate
+      # per-container tmpfs mounts are private and the socket would never cross
+      # between the containers). The nax-builder writes its unix socket here and
+      # the server's agent dials it. The server mounts it read-write because
+      # connect() to a unix socket needs write access on the socket file; the
+      # builder creates it 0o660 owned by `naxb`, and the server is joined to the
+      # `naxb` group (see the Dockerfile usermod), so no DAC is needed here.
+      - nax-sock:/run/nax
     environment:
       - TZ=${TZ:-UTC}
       # Override credentials by uncommenting and setting before first start.
       # See README.md for ADAPTIX_OPERATORS format.
       # - ADAPTIX_TEAMSERVER_PASSWORD=
       # - ADAPTIX_OPERATORS=operator1:secret1,operator2:secret2
+    restart: unless-stopped
+
+  # Nax builder sidecar. Compiles the Nax agent payload on request, reached over
+  # the shared /run/nax unix socket (no external port). Runs in its own image
+  # with the pinned NaX source + cross toolchain, so the teamserver image stays
+  # lean. network_mode: none keeps the build traffic local — only the socket
+  # crosses between the two. read_only: true + the DAC_OVERRIDE write on the
+  # socket is the tightened form (the builder writes its .o/.bin into the tree;
+  # see the builder image). no-new-privs on; caps are the minimal set.
+  nax-builder:
+    profiles: ["runtime"]
+    image: adaptixc2-omni-nax-builder:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.nax-builder
+    container_name: adaptixc2-nax-builder
+    network_mode: none
+    user: "naxb"                          # non-root (UID 10002)
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE       # write the .o/.bin it builds into the tree
+      - CHOWN              # normalize ownership on what it writes
+      - SETUID             # run as the user
+      - SETGID
+    security_opt:
+      - no-new-Privs
+    # Shared socket dir — a named volume so the server (above) sees the same
+    # /run/nax the builder writes into. tmpfs would be a private per-container
+    # mount and the socket wouldn't cross containers.
+    volumes:
+      - nax-sock:/run/nax
+    mem_limit: 2g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Linux AppImage build. Drives one of two AdaptixC2/Dockerfile stages:
@@ -89,3 +136,10 @@ services:
     volumes:
       - ./AdaptixClient-dist:/client-dist-output
     command: sh -c "cp -r /client-dist/. /client-dist-output/"
+
+# Named volume the nax-builder writes its unix socket into and the server dials.
+# A named volume (not tmpfs) is required so the socket is shared between the two
+# containers — each container's own tmpfs mount is private.
+volumes:
+  nax-sock:
+    driver: local
