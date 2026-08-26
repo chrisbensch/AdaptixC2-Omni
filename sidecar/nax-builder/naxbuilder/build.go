@@ -62,6 +62,39 @@ func makeArgs(req *NaxBuildRequest) map[string]string {
 	}
 }
 
+// writeConfigHeaders writes the server-provided generated headers into the NaX
+// source tree before a build. The beacon's Config.h includes Config_profile.h and
+// Config_sleepmask.h, which are generated per-build by the server's pure-Go
+// generators and shipped base64 in the request (the old in-server code wrote them
+// to src_beacon/include/). Only non-empty fields are written; an empty field means
+// "leave whatever is already in the tree", so a build that relies on the pinned
+// tree's own Config_sleepmask.h (for example) still works.
+func writeConfigHeaders(root string, req *NaxBuildRequest) error {
+	type header struct {
+		dir  string
+		name string
+		data []byte
+	}
+	headers := []header{
+		{"src_beacon/include", "Config.h", req.ConfigH},
+		{"src_beacon/include", "Config_profile.h", req.ConfigProfileH},
+		{"src_beacon/include", "Config_sleepmask.h", req.ConfigSleepmaskH},
+	}
+	for _, h := range headers {
+		if len(h.data) == 0 {
+			continue
+		}
+		dst := filepath.Join(root, h.dir, h.name)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", h.dir, err)
+		}
+		if err := os.WriteFile(dst, h.data, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", h.name, err)
+		}
+	}
+	return nil
+}
+
 // BuildComponents runs the component-only make target and reads the component
 // files, returning a NaxBuildResponse with the raw component bytes plus
 // size/sha256/flags. The server later repacks these via packNaxBin.
@@ -85,6 +118,7 @@ func BuildComponents(root string, req *NaxBuildRequest) (*NaxBuildResponse, erro
 		Components: comps,
 		Flags:      fmt.Sprintf("0x%04x", flags(req)),
 		StompDll:   firstNonEmpty(req.StompDll, "chakra.dll"),
+		OK:         true,
 	}
 	return finalize(resp), nil
 }

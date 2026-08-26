@@ -112,6 +112,47 @@ func TestBuildComponentsMissingComponentErrors(t *testing.T) {
 	}
 }
 
+// TestWriteConfigHeaders verifies that writeConfigHeaders writes only the
+// non-empty headers to src_beacon/include/, leaving any tree-provided copies
+// untouched (an empty field is skipped).
+func TestWriteConfigHeaders(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src_beacon", "include"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A tree-provided Config_sleepmask.h that must NOT be overwritten.
+	pinned := "PINNED-SLEEPMASK"
+	if err := os.WriteFile(filepath.Join(root, "src_beacon", "include", "Config_sleepmask.h"), []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := &NaxBuildRequest{
+		ConfigH:          []byte("CONFIG-H"),
+		ConfigProfileH:   []byte("CONFIG-PROFILE-H"),
+		// ConfigSleepmaskH intentionally empty -> leave the pinned copy.
+	}
+	if err := writeConfigHeaders(root, req); err != nil {
+		t.Fatalf("writeConfigHeaders: %v", err)
+	}
+
+	check := func(name, want string) {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(root, "src_beacon", "include", name))
+		if err != nil {
+			t.Errorf("read %s: %v", name, err)
+			return
+		}
+		if string(b) != want {
+			t.Errorf("%s = %q, want %q", name, string(b), want)
+		}
+	}
+
+	check("Config.h", "CONFIG-H")
+	check("Config_profile.h", "CONFIG-PROFILE-H")
+	// The pinned sleepmask header must be untouched (empty field was skipped).
+	check("Config_sleepmask.h", pinned)
+}
+
 func TestSelectMakeTarget(t *testing.T) {
 	cases := []struct {
 		req  NaxBuildRequest

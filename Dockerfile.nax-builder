@@ -63,6 +63,7 @@ RUN apt-get update && \
         g++-mingw-w64-i686 \
         nasm \
         python3 \
+        patch \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Dedicated non-root UID for the builder (10002; the teamserver is 10001).
@@ -76,6 +77,24 @@ WORKDIR /nax
 # the agent's pe_templates/). This is the builder's own copy of the pinned NaX
 # submodule — the teamserver image no longer carries the full tree.
 COPY NaX /nax
+
+# Apply the NaX loader mingw-w64 12.2 workaround (Bookworm's intrin-impl.h
+# defines __faststorefence() via __builtin_ia32_sfence(), unavailable under the
+# loader's -mno-sse). Pre-define the same guard before windows.h so the header
+# skips its broken inline definition. Patch paths are relative to the NaX root;
+# -p1 strips the a/ prefix. Applied before `make components`.
+COPY patches/nax-loader-mingw-faststorefence.patch /nax-mingw.patch
+RUN cd /nax && patch -p1 --forward < /nax-mingw.patch
+
+# Use the x86-64 mingw objcopy, not the host default. On this image `objcopy`
+# resolves to an ARM triple that cannot read x86-64 PE files, so
+# `objcopy --dump-section .text` fails with "file format not recognized" and the
+# loader/beacon .bin comes out 0 bytes. These patches point both Makefiles at the
+# correct tool.
+COPY patches/nax-loader-objcopy.patch /nax-loader-objcopy.patch
+COPY patches/nax-beacon-objcopy.patch /nax-beacon-objcopy.patch
+RUN cd /nax && patch -p1 --forward < /nax-loader-objcopy.patch && \
+    patch -p1 --forward < /nax-beacon-objcopy.patch
 
 # Prebuild the invariant beacon/loader .o files at image build, so runtime
 # `make link-components` is seconds not minutes. Same trick as the teamserver's

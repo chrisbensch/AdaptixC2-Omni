@@ -144,6 +144,13 @@ RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
     patch -p2 --verbose < /src/patches/kharon-core-mingw-compat.patch
 
 RUN cd /src/AdaptixC2/AdaptixServer && \
+    # The copied go.work carries two entries from the local repo layout
+    # (../../NaX/src_server/agent_nonameax, ../../sidecar/nax-builder) that are
+    # wrong inside this stage: NaX lives at extendsers/agent_nonameax and the
+    # sidecar at /src/AdaptixC2/sidecar/nax-builder, never under /src/NaX or
+    # /src/sidecar. `go work use` only appends, so strip the stale entries first
+    # or `go work sync` fails resolving them.
+    sed -i '/NaX\/src_server\/agent_nonameax/d; /sidecar\/nax-builder/d' go.work && \
     # Mirror the locally-verified workspace: register every extender, plus the
     # sidecar (the Nax agent's go.mod resolves it through a local replace, so
     # listing it makes `go work sync` resolve it explicitly).
@@ -188,6 +195,14 @@ RUN if [ -d /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist ]; then \
 # (fallback: ModuleDir/../../../NaX = /app/NaX).
 
 COPY NaX /src/NaX
+
+# Apply the NaX loader mingw-w64 12.2 workaround (Bookworm's intrin-impl.h
+# defines __faststorefence() via __builtin_ia32_sfence(), unavailable under the
+# beacon/loader -mno-sse). The loader's Common.h pulls windows.h before its own
+# guard, so pre-define the same macro before windows.h. Patch paths are relative
+# to the NaX root; -p1 strips the a/ prefix. Applied before `make components`.
+COPY patches/nax-loader-mingw-faststorefence.patch /nax-mingw.patch
+RUN cd /src/NaX && patch -p1 --forward < /nax-mingw.patch
 
 # Build each NaX plugin. Output goes directly to dist/extenders/<name>/.
 RUN set -eux; \

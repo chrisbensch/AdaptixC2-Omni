@@ -1,0 +1,11 @@
+--- a/src_loader/Makefile
++++ b/src_loader/Makefile
+@@ -29,7 +29,7 @@
+ ##
+ CC_X64   := x86_64-w64-mingw32-g++
+ NASM     := nasm
+-OBJCOPY  := objcopy
++OBJCOPY := x86_64-w64-mingw32-objcopy
+ 
+ ##
+ ## Technique selection (overridable from parent Makefile)

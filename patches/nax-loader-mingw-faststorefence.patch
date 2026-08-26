@@ -1,0 +1,45 @@
+From: Omni build harness
+Subject: Fix NaX loader build on Bookworm's mingw-w64 12.2 (__faststorefence under -mno-sse)
+
+The NaX loader (src_loader) is compiled as C++ with -mno-sse. On Debian
+Bookworm's mingw-w64 (12.2.0), winnt.h pulls in psdk_inc/intrin-impl.h, which
+defines __faststorefence() using __builtin_ia32_sfence(). That builtin is
+unavailable when -mno-sse is active, so every loader translation unit fails to
+compile:
+
+    intrin-impl.h:667:5: error: '__builtin_ia32_sfence' was not declared in
+    this scope; did you mean '__builtin_ia32_fnclex'?
+
+NaX's beacon (src_beacon) already avoids this because its Common.h includes
+Macros.h (which pre-defines the guard macro) before windows.h. The loader's
+Common.h pulls <windows.h> BEFORE <Macros.h>, so the guard arrives too late and
+the header still emits its broken inline __faststorefence().
+
+Pre-define the same guard macro intrin-impl.h checks (via __INTRINSIC_PROLOG)
+at the very top of src_loader/include/Common.h, before <windows.h>, so the
+header skips the definition entirely. Only src_loader is affected; the beacon
+build is unchanged.
+
+diff --git a/src_loader/include/Common.h b/src_loader/include/Common.h
+index a8e3fe3..906664b 100644
+--- a/src_loader/include/Common.h
++++ b/src_loader/include/Common.h
+@@ -1,6 +1,18 @@
+ #ifndef STARDUST_COMMON_H
+ #define STARDUST_COMMON_H
+ 
++//
++// mingw-w64 intrinsic workaround (Bookworm 12.2 + -mno-sse).
++// winnt.h -> psdk_inc/intrin-impl.h defines __faststorefence() using
++// __builtin_ia32_sfence(), which is unavailable under -mno-sse and breaks the
++// build. Pre-defining this guard (the same macro intrin-impl.h checks via
++// __INTRINSIC_PROLOG) makes it skip that definition entirely. This MUST come
++// before <windows.h> here, since Common.h pulls windows.h before Macros.h.
++//
++#ifndef __INTRINSIC_DEFINED___faststorefence
++#define __INTRINSIC_DEFINED___faststorefence
++#endif
++
+ //
+ // system headers
+ //

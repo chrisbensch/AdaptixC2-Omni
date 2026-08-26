@@ -53,6 +53,13 @@ func handleRequest(req *NaxBuildRequest) (*NaxBuildResponse, error) {
 		return nil, err // ServeConn serializes this to a NaxBuildError frame.
 	}
 
+	// Write the server-generated headers (Config.h / Config_profile.h /
+	// Config_sleepmask.h) into the NaX tree before any make target runs; the beacon
+	// includes them and will not compile without them.
+	if err := writeConfigHeaders(naxRoot, req); err != nil {
+		return nil, err
+	}
+
 	if req.OutputFormat == "" || req.OutputFormat == "bin" {
 		return BuildComponents(naxRoot, req)
 	}
