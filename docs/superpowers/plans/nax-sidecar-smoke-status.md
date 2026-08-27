@@ -61,7 +61,7 @@ over `/run/nax/builder.sock`. Proven working:
 - [x] **Loader + beacon COMPILE** — the faststorefence fix holds; all loader and
       beacon translation units compile with 0 sfence errors.
 
-### ⛔ New blocker — `section below image base` (pre-existing, out of scope)
+### ✅ Resolved — `section below image base` / objcopy (was thought out-of-scope)
 At the **PE-exe link / objcopy** stage both the loader and beacon fail:
 
 ```
@@ -69,22 +69,32 @@ x86_64-w64-mingw32-ld: bin/nax_loader.x64.exe:.text: section below image base
 objcopy: build/http/beacon.x64.exe: file format not recognized  → 0-byte .bin
 ```
 
-**Proven pre-existing & environmental, not a sidecar bug:** `make loader` (loader
-only — no generated header is involved) fails *identically* with a 0-byte bin. So
-the error is independent of the header-writing / faststorefence work. Root cause is
-NaX's `Linker.ld` (no section VMA) combined with `-Wl,--image-base,0x10000000` on
-Debian bookworm's mingw-w64 12.2 — ld places sections below the image base and
-objcopy then can't read the resulting exe. Fixing it means editing NaX's `Linker.ld`
-or link flags, i.e. a **submodule** change — out of scope for Milestone 2 (and
-AGENTS.md forbids committing inside submodule trees). The sidecar's job — socket +
-header writing + invoking the real `make` path — is fully proven.
+**Root cause (fixed in `6bcee2e`):** the loader/beacon Makefiles used
+`OBJCOPY := objcopy`, which resolves on this image to the host default — an **ARM**
+triple (`aarch64-linux-gnu-objcopy`) that cannot read x86-64 PE files. The
+`section below image base` line is a harmless ld *warning* (PE sections land at
+`image_base + 0x1000`); the real failure is `objcopy: file format not recognized`
+→ 0-byte `.bin`. Proven independent of the sidecar: `make loader` (loader-only, no
+generated header) fails identically.
+
+**Fix:** point both `src_loader/Makefile` and `src_beacon/Makefile` at
+`x86_64-w64-mingw32-objcopy` (supports `pe-x86-64`) via
+`patches/nax-loader-objcopy.patch` + `patches/nax-beacon-objcopy.patch`, applied in
+`Dockerfile.nax-builder`. Verified: smoke run now produces valid components (loader
+2976 B, beacon 91007 B). No submodule change needed — this was a toolchain path
+issue, not a `Linker.ld` problem. The sidecar's job — socket + header writing +
+invoking the real `make` path to produce a Nax payload — is fully proven.
 
 ### ⏭️ Next (when resuming Milestone 2)
-- [ ] Decide how to handle `section below image base`: (a) accept as a known
-      NaX-toolchain limitation and document it, or (b) get an in-scope fix for the
-      beacon/loader link (needs a NaX-side change — coordinate as a submodule patch).
-- [ ] Re-run the smoke client against the committed `:patched` image to lock in the
-      result before committing.
+- [ ] **Lock in the objcopy fix** — re-run `nax-smoke` against a freshly built
+      committed image to confirm valid components (loader/beacon `.bin`) on the
+      `:patched` image, not just a locally-built one. (The socket-payload goal is
+      met; this closes out the stale blocker line above.)
+- [ ] **CI parity** — ensure the objcopy patch + header-writing land in CI so they
+      are verified on amd64 + arm64 (CI already runs both arches). Currently the
+      fix is only validated locally.
+- [ ] **`read_only` re-evaluation** — dropped for the prototype; decide whether to
+      restore it + `data/` write-ability.
 
 ### ⛔ Blocked / not feasible now
 - [ ] **True end-to-end with a real profile** — no NaX C2 profile fixture exists
