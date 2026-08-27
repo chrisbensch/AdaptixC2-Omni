@@ -3,10 +3,22 @@
 Working session: confirm the builder sidecar produces a Nax payload **through the
 socket** (no in-server `go build`) on Bookworm mingw-w64 12.2, with Kharon untouched.
 
-> **Commit note:** all work below is currently **uncommitted / untracked**. The
-> submodule trees are clean (no dirty changes committed inside them). Before the
-> next commit, stage `patches/`, `Dockerfile`, `Dockerfile.nax-builder`, and the
-> `sidecar/` changes together.
+> **Commit note:** the Milestone 2 work is committed (`nax-sidecar: fix
+> loader/beacon build (objcopy toolchain + OK flag)`). The submodule trees stay
+> clean — nothing is committed inside them. Local-only dev state (below) is
+> reproducible via `scripts/setup-local.sh`, not committed.
+
+**Local-only dev state (not committed, per AGENTS.md):** the `AdaptixC2`
+submodule's `go.work` needs two extra `use` entries (the pinned NaX agent module
++ the sidecar) so `go vet`/`go test`/`go build` resolve the agent→sidecar local
+`replace`. These are **layout-specific** — locally `../../NaX/...` /
+`../../sidecar/...`, but the Docker build strips and re-adds them with
+correct container paths — so they can't be a single committed patch and must
+stay out of the submodule. Reproduce them with:
+
+```bash
+./scripts/setup-local.sh   # applies patches/adaptixc2-go-work.patch; idempotent
+```
 
 ---
 

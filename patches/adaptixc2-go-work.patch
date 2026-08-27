@@ -1,0 +1,14 @@
+diff --git a/AdaptixServer/go.work b/AdaptixServer/go.work
+index 1b04a4b..06d0552 100644
+--- a/AdaptixServer/go.work
++++ b/AdaptixServer/go.work
+@@ -9,4 +9,9 @@ use (
+ 	./extenders/beacon_listener_tcp
+ 	./extenders/gopher_agent
+ 	./extenders/gopher_listener_tcp
++	// Nax agent module (submodule) — payload generation now talks to the
++	// sidecar builder over a unix socket. Its go.mod pins the sidecar via a
++	// local replace, so both this module and the sidecar are listed here.
++	../../NaX/src_server/agent_nonameax
++	../../sidecar/nax-builder
+ )
