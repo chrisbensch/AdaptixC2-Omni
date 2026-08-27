@@ -111,3 +111,63 @@ jobs:
       - name: Tear down
         if: always()
         run: docker rm -f omni-smoke 2>/dev/null || true
+
+  nax-builder:
+    # Verifies the Nax builder sidecar image (Dockerfile.nax-builder) end-to-end:
+    # build it, then drive a real payload through the builder's unix socket with
+    # the dev-only `nax-smoke` client. This is what catches regressions in the
+    # mingw objcopy toolchain fix and the header-writing path — neither is exercised
+    # by the runtime-image smoke test above. Runs per-arch because the host-default
+    # `objcopy` triple (and thus the fix) is arch-specific.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v3
+      - name: Build nax-builder image
+        run: docker build -f Dockerfile.nax-builder -t adaptixc2-omni-nax-builder:ci .
+      - name: Build smoke client (native arch)
+        # The client runs as the builder's entrypoint, i.e. inside the container,
+        # so it must match this runner's arch (native here).
+        run: |
+          cd sidecar/nax-builder
+          export GOEXPERIMENT=jsonv2,greenteagc
+          GOOS=linux GOARCH=$(go env GOARCH) go build -o /tmp/nax-smoke ./cmd/smoke
+      - name: Start builder with hardened posture
+        run: |
+          docker volume create nax-ci >/dev/null
+          docker run -d --name nax-ci \
+            -v nax-ci:/run/nax \
+            --cap-drop ALL \
+            --cap-add DAC_OVERRIDE --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true \
+            adaptixc2-omni-nax-builder:ci
+      - name: Wait for builder socket
+        run: |
+          for i in $(seq 1 30); do
+            docker exec nax-ci test -S /run/nax/builder.sock && break
+            sleep 2
+          done
+          docker exec nax-ci test -S /run/nax/builder.sock || {
+            echo "::error::builder socket never appeared"; docker logs nax-ci; exit 1;
+          }
+      - name: Smoke-test the builder over its socket
+        # Exits non-zero if the build fails (e.g. broken objcopy -> 0-byte .bin),
+        # so a non-zero step is a hard CI signal. Output is captured on failure.
+        run: |
+          docker run --rm \
+            -v nax-ci:/run/nax \
+            -v /tmp/nax-smoke:/usr/local/bin/nax-smoke:ro \
+            --entrypoint /usr/local/bin/nax-smoke \
+            adaptixc2-omni-nax-builder:ci
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f nax-ci >/dev/null 2>&1 || true
+          docker volume rm nax-ci >/dev/null 2>&1 || true

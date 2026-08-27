@@ -86,13 +86,14 @@ issue, not a `Linker.ld` problem. The sidecar's job — socket + header writing 
 invoking the real `make` path to produce a Nax payload — is fully proven.
 
 ### ⏭️ Next (when resuming Milestone 2)
-- [ ] **Lock in the objcopy fix** — re-run `nax-smoke` against a freshly built
-      committed image to confirm valid components (loader/beacon `.bin`) on the
-      `:patched` image, not just a locally-built one. (The socket-payload goal is
-      met; this closes out the stale blocker line above.)
-- [ ] **CI parity** — ensure the objcopy patch + header-writing land in CI so they
-      are verified on amd64 + arm64 (CI already runs both arches). Currently the
-      fix is only validated locally.
+- [x] **Lock in the objcopy fix** — verified against a freshly built committed
+      `:patched` image (exit 0, beacon.x64.bin 99868 B, loader 2976 B / beacon
+      91007 B). Socket-payload goal met.
+- [x] **CI parity** — added a `nax-builder` job to `.github/workflows/build.yml`
+      (runs on ubuntu-latest + ubuntu-24.04-arm). Builds the sidecar image, then
+      drives a real payload through its socket with `nax-smoke`; non-zero exit is a
+      hard CI signal. The sidecar uses stdlib + internal packages only (no external
+      deps, no go.sum), so the build is offline-capable and needs no go.work edit.
 - [ ] **`read_only` re-evaluation** — dropped for the prototype; decide whether to
       restore it + `data/` write-ability.
 
