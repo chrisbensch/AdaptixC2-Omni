@@ -93,15 +93,24 @@ invoking the real `make` path to produce a Nax payload — is fully proven.
 - [ ] **CI parity** — ensure the objcopy patch + header-writing land in CI so they
       are verified on amd64 + arm64 (CI already runs both arches). Currently the
       fix is only validated locally.
-- [x] **`read_only` re-evaluation** — RESOLVED. Dropped because the Kharon agent
-      compiles beacon/loader at runtime (writes into the rootfs). Nax compiles in
-      the nax-builder sidecar instead, so a **Nax-only deployment can run with
-      `read_only: true`** — every runtime write (SQLite DB, listener data,
-      downloads, screenshots, TLS cert/key) goes to the writable `./data`
-      bind-mount at `/app/data`, and logs go to stdout; no tmpfs needed. Default
-      stays `false` (Kharon is in the shipped profile). Example + toggle:
-      `profile.nax-only.yaml` and `read_only: ${ADAPTIX_READ_ONLY:-false}` in
-      `docker-compose.yml`.
+- [x] **CI parity (implemented)** — the nax-builder image now builds + smoke-tests
+      on BOTH arches in `.github/workflows/build.yml`. The step builds
+      `Dockerfile.nax-builder`, copies the pinned NaX tree out of the freshly built
+      image, runs the builder, and drives a real build through its unix socket with
+      the existing `sidecar/nax-builder/cmd/smoke` client (which synthesizes the one
+      header the pinned tree lacks, `Config_profile.h`). This proves socket comms +
+      `writeConfigHeaders` + the mingw/objcopy fix produce a non-empty payload on
+      each arch — closing the "only validated locally" gap. Runs as root (a
+      build-correctness probe; the privilege model is covered by the runtime smoke
+      test). A broken objcopy triple (host default on arm64) fails the build with a
+      0-byte component, so CI catches that regression.
+- [ ] **True end-to-end with a real profile** — no NaX C2 profile fixture exists
+      (`Config_profile.h` needs ~1697 serialized bytes with a real wire format; it's
+      gitignored and generated per-build by the server). The smoke client synthesizes
+      a syntactically valid but value-trivial (`0x00`) profile so the beacon
+      *compiles* — it does not decode into a live C2 callback. A real-profile run
+      still needs the server's pure-Go generators + a running teamserver to drive
+      through.
 
 ### ⛔ Blocked / not feasible now
 - [ ] **True end-to-end with a real profile** — no NaX C2 profile fixture exists
@@ -114,6 +123,9 @@ invoking the real `make` path to produce a Nax payload — is fully proven.
 - [ ] **Milestone 3** — move the Kharon agent over to the builder sidecar too.
 - [ ] **CI parity** — confirm the new patch + header-writing land in CI (already
       verifies amd64 + arm64).
+      ^ NOTE: CI parity for the nax-builder image is now implemented (see the
+      "Next" section above); this line refers to confirming it survives an upstream
+      submodule refresh / the patch-decay cron.
 
 ---
 
