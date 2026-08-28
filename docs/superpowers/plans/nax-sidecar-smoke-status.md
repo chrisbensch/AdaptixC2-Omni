@@ -93,8 +93,15 @@ invoking the real `make` path to produce a Nax payload — is fully proven.
 - [ ] **CI parity** — ensure the objcopy patch + header-writing land in CI so they
       are verified on amd64 + arm64 (CI already runs both arches). Currently the
       fix is only validated locally.
-- [ ] **`read_only` re-evaluation** — dropped for the prototype; decide whether to
-      restore it + `data/` write-ability.
+- [x] **`read_only` re-evaluation** — RESOLVED. Dropped because the Kharon agent
+      compiles beacon/loader at runtime (writes into the rootfs). Nax compiles in
+      the nax-builder sidecar instead, so a **Nax-only deployment can run with
+      `read_only: true`** — every runtime write (SQLite DB, listener data,
+      downloads, screenshots, TLS cert/key) goes to the writable `./data`
+      bind-mount at `/app/data`, and logs go to stdout; no tmpfs needed. Default
+      stays `false` (Kharon is in the shipped profile). Example + toggle:
+      `profile.nax-only.yaml` and `read_only: ${ADAPTIX_READ_ONLY:-false}` in
+      `docker-compose.yml`.
 
 ### ⛔ Blocked / not feasible now
 - [ ] **True end-to-end with a real profile** — no NaX C2 profile fixture exists
@@ -104,8 +111,6 @@ invoking the real `make` path to produce a Nax payload — is fully proven.
       teamserver to drive through.
 
 ### 🔮 Later passes (not started)
-- [ ] **`read_only` re-evaluation** — dropped for the prototype; decide whether to
-      restore it + `data/` write-ability.
 - [ ] **Milestone 3** — move the Kharon agent over to the builder sidecar too.
 - [ ] **CI parity** — confirm the new patch + header-writing land in CI (already
       verifies amd64 + arm64).

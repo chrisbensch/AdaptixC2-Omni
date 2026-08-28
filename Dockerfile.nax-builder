@@ -25,7 +25,7 @@
 # ============================================
 # Same pinned golang base as the main Dockerfile. The cross-compile toolchain
 # lives in the runtime stage below, so the build stage stays lean and fast.
-FROM golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS build
+FROM golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GOEXPERIMENT=jsonv2,greenteagc
@@ -46,7 +46,7 @@ RUN cd /src/sidecar/nax-builder && \
 # Stage: runtime — toolchain + pinned NaX source + worker binary
 # ============================================
 # Pinned by digest. Same rationale as the main Dockerfile; bump on refresh.
-FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 

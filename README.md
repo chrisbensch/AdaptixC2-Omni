@@ -24,7 +24,7 @@ A single `docker compose build` produces a runtime image containing:
   - All [PostEx-Arsenal](https://github.com/entropy-z/PostEx-Arsenal) BOFs and shellcode under `bofs/dist/` and `postex_sc/`
 - **Profile pre-merged** (`profile.kharon.yaml`) so all 9 extenders register on first start and both AxScript module sets (`extension-kit.axs`, `kh_modules.axs`) auto-load.
 - **TLS auto-bootstrap** — the entrypoint generates a self-signed ECDSA P-256 cert (365-day validity, SAN from `ADAPTIX_TLS_SAN` env var or `DNS:localhost,IP:127.0.0.1` default) on first run; persistent state lives in `./data/` via a bind-mount.
-- **Hardened runtime posture** — server runs as unprivileged UID 10001 with a read-only rootfs, `cap_drop:[ALL]` plus the four caps it actually needs (`CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`), `no-new-privileges`, mem/PID/log-size limits, ECDHE-only TLS suites, and an nginx-decoy 404 page so passive enumeration can't fingerprint the framework. Trivy + CycloneDX SBOM run in CI. Full breakdown in [BLUEPRINT.md §5 / §12](./BLUEPRINT.md).
+- **Hardened runtime posture** — server runs as unprivileged UID 10001 with a read-only rootfs (off by default because the Kharon agent compiles payloads in-server; enable it for a Nax-only deployment with `ADAPTIX_READ_ONLY=true`), `cap_drop:[ALL]` plus the four caps it actually needs (`CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`), `no-new-privileges`, mem/PID/log-size limits, ECDHE-only TLS suites, and an nginx-decoy 404 page so passive enumeration can't fingerprint the framework. Trivy + CycloneDX SBOM run in CI. Full breakdown in [BLUEPRINT.md §5 / §12](./BLUEPRINT.md).
 
 Plus separate workflows for the GUI clients:
 
@@ -92,7 +92,7 @@ docker compose --profile runtime up -d
 
 To rotate the cert later, `rm ./data/server.rsa.crt ./data/server.rsa.key` and restart (env vars get re-read). The `.rsa.` in the filenames is historical — the cert is ECDSA.
 
-The server runs as an unprivileged user (UID/GID 10001, `adaptix`) inside the container with a read-only rootfs, only the four capabilities it actually needs (`CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`), and `no-new-privileges`. Files written by the entrypoint into `./data/` end up owned by UID 10001 on the host — if you need to read them as your shell user, `sudo chown -R "$USER" ./data` or just `sudo cat ./data/credentials.txt`.
+The server runs as an unprivileged user (UID/GID 10001, `adaptix`) inside the container with a read-only rootfs (off by default — the Kharon agent compiles payloads in-server, which needs a writable rootfs; set `ADAPTIX_READ_ONLY=true` for a Nax-only deployment, where compilation is offloaded to the sidecar), only the four capabilities it actually needs (`CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`), and `no-new-privileges`. Files written by the entrypoint into `./data/` end up owned by UID 10001 on the host — if you need to read them as your shell user, `sudo chown -R "$USER" ./data` or just `sudo cat ./data/credentials.txt`.
 
 ### 3. Build a client
 
@@ -167,6 +167,7 @@ AdaptixC2-Omni/
 ├── Dockerfile            ← unified server build (multi-stage, host-arch by default)
 ├── docker-compose.yml    ← profiles: build / runtime / build-client
 ├── profile.kharon.yaml   ← merged server profile, 9 extenders + 2 axscripts
+├── profile.nax-only.yaml ← example Nax-only profile (no beacon/gopher/Kharon) that can run with a read-only rootfs
 ├── scripts/              ← host-side build helpers
 │   ├── build-client-linux.sh        ← Linux AppImage build (amd64 + arm64 via Docker)
 │   ├── build-client-macos.sh        ← native macOS .app build (Apple Silicon arm64)

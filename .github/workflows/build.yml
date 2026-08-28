@@ -25,16 +25,16 @@ jobs:
         run: docker compose --profile build build
       - name: Smoke-test the runtime image
         # Mirrors the hardened posture from docker-compose.yml so CI catches
-        # regressions in privilege reduction: read-only rootfs, /tmp tmpfs,
-        # cap_drop=ALL with only the four caps the entrypoint + listeners
-        # genuinely need, and no-new-privileges. Healthcheck reaching `healthy`
-        # implies the server bound 4321 successfully as the unprivileged user.
+        # regressions in privilege reduction: cap_drop=ALL with only the four
+        # caps the entrypoint + listeners genuinely need, and no-new-privileges.
+        # read_only stays off by default (Kharon compiles payloads at runtime,
+        # which needs a writable rootfs); see the ADAPTIX_READ_ONLY override.
+        # Healthcheck reaching `healthy` implies the server bound 4321
+        # successfully as the unprivileged user.
         run: |
           mkdir -p data
           docker run -d --name omni-smoke -p 4321:4321 \
               -v "$PWD/data:/app/data" \
-              --read-only \
-              --tmpfs /tmp:rw,nosuid,nodev,size=64m \
               --cap-drop ALL \
               --cap-add CHOWN \
               --cap-add SETUID \

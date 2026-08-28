@@ -1,0 +1,75 @@
+# Example Nax-only server profile.
+#
+# Loads ONLY the Nax agent + listeners/store — no beacon/gopher/Kharon. This is
+# the deployment shape that can run with `read_only: true` (see docker-compose.yml):
+# because Nax compiles payloads in the separate nax-builder sidecar, the server
+# does no runtime compilation and never needs to write to the rootfs. Every
+# runtime write — SQLite DB, listener data, downloads, uploads, screenshots, TLS
+# cert/key, rendered profile — goes to the writable ./data bind-mount at
+# /app/data, and logs go to stdout (captured by Docker). No tmpfs required.
+#
+# To use: copy this file to ./data/profile.yaml BEFORE the first start. The
+# entrypoint renders profile.yaml.tmpl into ./data/profile.yaml only when that
+# file does not already exist, so pre-populating it wins. Then start with the
+# runtime profile and flip read_only on:
+#
+#   cp profile.nax-only.yaml ./data/profile.yaml
+#   ADAPTIX_READ_ONLY=true docker compose --profile runtime up
+#
+# Rotate credentials by wiping ./data/ and re-running, or edit data/profile.yaml
+# directly and `restart` to apply.
+
+Teamserver:
+  interface: "0.0.0.0"
+  port: 4321
+  endpoint: "/endpoint"
+  password: "__ADAPTIX_TEAMSERVER_PASSWORD__"
+  only_password: true
+  operators:
+__ADAPTIX_OPERATORS_BLOCK__
+  cert: "/app/data/server.rsa.crt"
+  key: "/app/data/server.rsa.key"
+  extenders:
+    # Nax agent + listeners only — payload compilation happens in the nax-builder
+    # sidecar, so the server never touches the rootfs to build payloads.
+    - "extenders/agent_nonameax/config.yaml"
+    - "extenders/listener_nonameax_http/config.yaml"
+    - "extenders/listener_nonameax_smb/config.yaml"
+    - "extenders/service_nax_store/config.yaml"
+  # No axscripts: the Extension-Kit + PostEx-Arsenal scripts wrap beacon/kharon/
+  # gopher commands, which this profile does not load. Nax's own commands are
+  # built into the agent plugin, so there is nothing to wire here.
+  access_token_live_hours: 12
+  refresh_token_live_hours: 168
+
+HttpServer:
+  error:
+    status: 404
+    headers:
+      Content-Type: "text/html; charset=UTF-8"
+      # Defensive default: present as nginx rather than advertising the C2
+      # framework. The Adaptix-Version header upstream ships is stripped
+      # entirely — no defensive value to broadcasting a version. Operators
+      # who want a different decoy (Apache, IIS, etc.) can edit this in the
+      # rendered data/profile.yaml after first start.
+      Server: "nginx"
+    page: "404page.html"
+  http:
+    max_header_bytes: 8192
+    read_header_timeout_sec: 0
+    read_timeout_sec: 0
+    write_timeout_sec: 0
+    idle_timeout_sec: 0
+    request_timeout_sec: 300
+    request_timeout_message: "504 Gateway Timeout"
+    disable_keep_alives: false
+    enable_http2: true
+  tls:
+    min_version: "TLS1.2"
+    max_version: "TLS1.3"
+    prefer_server_cipher_suites: false
+    cipher_suites:
+      - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+      - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
