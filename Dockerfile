@@ -251,7 +251,7 @@ RUN cd /src/NaX && \
 # Stage: runtime — minimal server image
 # ============================================
 # Pinned by digest. Same rationale as the base stage above; bump on refresh.
-FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -273,11 +273,12 @@ RUN apt-get update && \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # `apt-get upgrade -y` above pulls Debian security updates into the base
-# image's pre-existing packages (e.g. libgnutls30 was at +deb12u6 in the
-# pinned base; +deb12u7 fixes a critical CVE). Pairing the digest pin (for
-# a reproducible starting point) with an upgrade pass (for security patches
-# available on build day) is the Debian convention; Trivy in CI surfaces
-# when a new patch is available and not yet picked up.
+# image's pre-existing packages. The pinned base (bookworm 12.15) already ships
+# libgnutls30 at +deb12u7, which fixes a critical CVE that earlier bases
+# (+deb12u6) had. Pairing the digest pin (for a reproducible starting point)
+# with an upgrade pass (for security patches available on build day) is the
+# Debian convention; Trivy in CI surfaces when a newer patch lands and isn't yet
+# picked up — time to bump the digest again.
 
 # Unprivileged runtime account. The entrypoint stays root long enough to chown
 # the /app/data bind mount and render the profile, then drops to `adaptix` via
