@@ -14,7 +14,7 @@
 # ============================================
 # Pinned by digest, not just tag. Tags are mutable; digests aren't. Bump alongside
 # the version when refreshing — see BLUEPRINT.md §3 for the lookup procedure.
-FROM golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS base
+FROM golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GOEXPERIMENT=jsonv2,greenteagc
