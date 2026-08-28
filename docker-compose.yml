@@ -22,11 +22,13 @@ services:
     image: adaptixc2-omni:latest
     container_name: adaptixc2-omni-server
     network_mode: host
-    # Kharon compiles beacon + loader at runtime (Config.cc, clang++, nasm,
-    # make, objcopy), so the rootfs must be writable. The entrypoint still
-    # gosu's to UID 10001, capabilities are still dropped, and no-new-privs
-    # still applies. On an isolated ephemeral VM, the privilege reduction
-    # is sufficient — read-only rootfs was belt-and-suspenders.
+    # Default read-only rootfs is OFF because the Kharon agent compiles beacon +
+    # loader at runtime (Config.cc, clang++, nasm, make, objcopy) — that writes
+    # into the rootfs. Nax compiles in the nax-builder sidecar instead, so a
+    # Nax-only deployment can flip this ON (compilation is offloaded and every
+    # runtime write goes to the writable ./data bind-mount at /app/data; logs go
+    # to stdout). No tmpfs is needed — the server never touches /tmp.
+    read_only: ${ADAPTIX_READ_ONLY:-false}
     cap_drop:
       - ALL
     cap_add:
