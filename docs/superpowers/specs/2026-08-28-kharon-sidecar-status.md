@@ -1,13 +1,15 @@
 # Kharon Sidecar (Milestone 3) — Status
 
 Working session: begin moving the **Kharon** agent's in-server payload compilation
-onto a sidecar, following the Nax-sidecar pattern (Milestone 2). Session paused
-after scope + approach were established; open questions captured below for the
-next session.
+onto a sidecar, following the Nax-sidecar pattern (Milestone 2). All design
+decisions are now resolved (see below); next step is the full spec.
 
 > **State:** design phase, not yet implemented. No code written for Milestone 3.
 > The Nax sidecar (Milestone 2) is the reference implementation for how this should
 > look.
+>
+> **Update (2026-08-28, session 2):** all seven open questions resolved — see
+> "Decisions made so far" below. Next step is drafting the full spec.
 
 ---
 
@@ -52,6 +54,16 @@ Key detail — paths are **cwd-dependent**:
 where `wd = os.Getwd()`. The sidecar must own its source tree and make these
 deterministic (see open questions).
 
+Further findings from `pl_agent.go` review:
+
+- **x86 is a beacon-only path.** `Format == "x86"` only selects the make target
+  (`Kharon.x86.bin`, raw beacon). The loader (Exe/Dll/Svc) is *always* compiled
+  with `clang++ -target x86_64-w64-mingw32` — upstream has no x86 loader. So
+  "x86 support" in the sidecar means only that its make step needs i686 mingw.
+- **The server mutates the source tree.** For Exe/Dll/Svc it writes a generated
+  `Shellcode.h` into `src_loader/Include/` before compiling. The sidecar must
+  own this write (from beacon bytes in the request), not the server.
+
 `ModuleDir` is set in `InitPlugin` (`Kharon/agent_kharon/src_server/pl_main.go:153`),
 so the same `ModuleDir/nax_builder_socket` socket-resolution pattern applies.
 
@@ -59,7 +71,7 @@ so the same `ModuleDir/nax_builder_socket` socket-resolution pattern applies.
 
 ## Decisions made so far
 
-### 1. Scope (assumed — needs confirmation)
+### 1. Scope — **CONFIRMED**: agent payload build only
 Only the **agent payload build** moves: `src_beacon` make + optional `src_loader`
 clang++ wrapper. **Stays in the server:**
 - Kharon HTTP listener (does not compile at runtime).
@@ -67,44 +79,47 @@ clang++ wrapper. **Stays in the server:**
   not compiled per-payload.
 
 ### 2. Approach: **B — separate Kharon sidecar**
-Parallel to `nax-builder`, its own image + socket, fully isolated from Nax. Chosen
-because Nax and Kharon builds share almost nothing (different Makefiles, different
-header strategies, different output shapes), so one worker would add coupling for
-little gain.
+Parallel to `sidecar/nax-builder/`, its own image + socket, fully isolated from
+Nax. Chosen because Nax and Kharon builds share almost nothing (different
+Makefiles, different header strategies, different output shapes), so one worker
+would add coupling for little gain.
 
-### 3. Build protocol: leaning **A — reuse `naxbuilder` client + framing**
-The server plugin would call the existing generic `naxbuilder.Client` (dial +
-length-prefixed JSON framing) and define Kharon-only message types in a small
-`kharonbuilder` package. Not yet confirmed — alternatives B (fresh module) and C
-(shared sidecarlib) were discussed.
+### 3. Build protocol — **CONFIRMED: A — reuse `naxbuilder` framing**
+The server plugin dials the Kharon socket using the same length-prefixed JSON
+framing as `naxbuilder` (dial + frame code reused), with Kharon-only message
+types in a new `kharonbuilder` package. Alternatives B (fresh module) and C
+(shared sidecarlib) rejected — C is premature refactoring for one consumer.
 
----
+### 4. Socket + volume — **CONFIRMED**
+Separate socket `/run/kharon/builder.sock` and its own shared named volume,
+fully distinct from the Nax sidecar's `/run/nax`.
 
-## Open questions (next session, in order)
+### 5. Source-tree ownership — **CONFIRMED**
+The sidecar image bakes `src_beacon` + `src_loader` at a fixed path (e.g.
+`/app/kharon/...`). The request carries all make vars + beacon bytes; for
+loader builds the **sidecar** generates `Shellcode.h` from those bytes and owns
+the write. The server plugin stops doing any local path resolution.
 
-1. **Confirm scope** — agent payload build only? Any reason to touch listeners or
-   `src_core`?
-2. **Build protocol** — A (reuse `naxbuilder` framing + Kharon message types) vs B
-   (fresh module) vs C (shared lib). Recommendation: A.
-3. **Socket + volume layout** — separate socket path (`/run/kharon/builder.sock`)
-   and its own shared volume/tmpfs, distinct from the Nax sidecar's `/run/nax`.
-4. **Source-tree ownership** — Kharon's build uses cwd-dependent paths; the sidecar
-   must own its tree and make `src_beacon` / `src_loader` locations deterministic.
-5. **x86 support** — Kharon builds both x64 and x86 (`cfg.Format == "x86"` → target
-   `x86`). Decide whether the sidecar handles both (affects toolchain: x86 mingw)
-   or just x64.
-6. **Concurrency** — Kharon writes into its source tree (not thread-safe). Serialize
-   builds with a mutex, or use per-request temp workspaces? (Nax sidecar serializes
-   with a mutex.)
-7. **Return contract** — what the sidecar returns (compiled bytes + filename) and
-   how the server repacks/returns it to Beacon.
+### 6. x86 — **CONFIRMED: support both targets**
+The sidecar ships i686 mingw alongside x86_64 and handles both make targets
+(`x64`, `x86`), preserving current operator-facing behavior. (Loader remains
+x64-only — that is an upstream limitation, unchanged.)
+
+### 7. Concurrency — **CONFIRMED: mutex serialization**
+Builds are serialized with a mutex, matching the Nax sidecar. Simpler than
+per-request temp workspaces; payload generation is not latency-critical.
+
+### 8. Return contract — **CONFIRMED**
+The sidecar returns compiled bytes + output filename (plus build logs for
+operator visibility). The server plugin repacks exactly as today: raw beacon
+for `Bin`/x86, loader exe/dll/svc otherwise.
 
 ---
 
 ## Implementation plan (pending design approval)
 
 Per repo process: this goes through the brainstorming → spec → writing-plans flow.
-Next steps once open questions are resolved:
+All open questions are resolved; next steps:
 
 1. Draft design doc (this file → full spec).
 2. Self-review the spec (placeholders, contradictions, scope, ambiguity).
