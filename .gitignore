@@ -9,3 +9,6 @@ build/
 
 # macOS noise
 .DS_Store
+
+# Hindsight Data
+.pi/hindsight/
