@@ -447,7 +447,6 @@ diff --git a/go.mod b/go.mod
 +
 +replace github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder => ../../../sidecar/kharon-builder
 
-diff --git a/src_server/pl_kharon_sidecar.go b/src_server/pl_kharon_sidecar.go
 new file mode 100644
 --- /dev/null	2026-08-29 22:48:27
 +++ b/agent_kharon/src_server/pl_kharon_sidecar.go	2026-08-29 22:34:00
@@ -539,7 +538,6 @@ new file mode 100644
 +	}
 +}
 
-diff --git a/src_server/pl_kharon_sidecar_test.go b/src_server/pl_kharon_sidecar_test.go
 new file mode 100644
 --- /dev/null	2026-08-29 22:48:27
 +++ b/agent_kharon/src_server/pl_kharon_sidecar_test.go	2026-08-29 22:34:00
