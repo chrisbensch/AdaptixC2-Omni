@@ -740,3 +740,18 @@ new file mode 100644
 +		t.Errorf("sleepMaskIndex = %d, want 3", got)
 +	}
 +}
+
+diff --git a/agent_kharon/Makefile b/agent_kharon/Makefile
+--- a/agent_kharon/Makefile
++++ b/agent_kharon/Makefile
+@@ -13,7 +13,8 @@
+ 	$(SRC_SERVER)/pl_main.go \
+ 	$(SRC_SERVER)/pl_agent.go \
+ 	$(SRC_SERVER)/pl_packer.go \
+-	$(SRC_SERVER)/pl_utils.go
++	$(SRC_SERVER)/pl_utils.go \
++	$(SRC_SERVER)/pl_kharon_sidecar.go
+ 
+ PLUGIN_OUT := $(DIST_DIR)/agent_kharon.so
+ 
+
