@@ -349,7 +349,7 @@
 +	// resolved src_beacon/src_loader via os.Getwd()/dist/extenders/…), which was
 +	// broken in the hardened runtime image where cwd is /app — a latent bug fixed
 +	// as a side effect of offloading the build.
-+	resp, _, buildErr := buildViaSidecar(&kharonbuilder.KharonBuildRequest{
++	payload, filename, buildErr := buildViaSidecar(&kharonbuilder.KharonBuildRequest{
 +		Target:            target,
 +		Debug:             debugMode,
 +		OutputFormat:      kharonOutputFormat(cfg.Format),
@@ -388,16 +388,16 @@
 +		return nil, "", fmt.Errorf("kharon: buildViaSidecar: %w", buildErr)
  	}
  
-+	fmt.Printf("DEBUG: Sidecar build OK: %s (%d bytes)\n", resp.Filename, resp.Size)
++	fmt.Printf("DEBUG: Sidecar build OK: %s (%d bytes)\n", filename, len(payload))
  	fmt.Println("\n✓ Build completed successfully!")
 -	fmt.Printf("  Output file: %s\n", outFileName)
 -	fmt.Printf("  Final size: %d bytes\n", len(finalBin))
-+	fmt.Printf("  Output file: %s\n", resp.Filename)
-+	fmt.Printf("  Final size: %d bytes\n", resp.Size)
++	fmt.Printf("  Output file: %s\n", filename)
++	fmt.Printf("  Final size: %d bytes\n", len(payload))
  	fmt.Println("=== AgentGenerateBuild END ===\n")
  
 -	return finalBin, outFileName, nil
-+	return resp.Payload, resp.Filename, nil
++	return payload, filename, nil
  }
 -
  func GetWindowsVersionName(major uint32, minor uint32, build uint32) string {
