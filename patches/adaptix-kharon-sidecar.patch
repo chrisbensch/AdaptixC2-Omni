@@ -1,0 +1,742 @@
+--- a/agent_kharon/src_server/pl_agent.go
++++ b/agent_kharon/src_server/pl_agent.go
+@@ -1,14 +1,12 @@
+ package main
+ 
+ import (
+-	"bytes"
+ 	"encoding/base64"
+ 	"encoding/binary"
+ 	"encoding/hex"
+ 	"encoding/json"
+ 	mrand "math/rand"
+ 	"os"
+-	"os/exec"
+ 	"path/filepath"
+ 	"sort"
+ 	"strconv"
+@@ -23,6 +21,8 @@
+ 	"github.com/google/uuid"
+ 
+ 	ax "github.com/Adaptix-Framework/axc2"
++
++	kharonbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder/kharonbuilder"
+ )
+ 
+ func AgentGenerateProfile(agentConfig string, listenerWM string, listenerMap map[string]any) ([]byte, error) {
+@@ -86,22 +86,6 @@
+ 	fmt.Printf("DEBUG: Malleable bytes generated (%d bytes)\n", len(malleableBytes))
+ 	fmt.Printf("DEBUG: HTTP Callback count: %d\n", callbackCount)
+ 
+-	// Get working directory
+-	wd, err := os.Getwd()
+-	if err != nil {
+-		fmt.Printf("ERROR: Failed to get working directory: %v\n", err)
+-		panic(err)
+-	}
+-	fmt.Printf("DEBUG: Working directory: %s\n", wd)
+-
+-	targetPath := filepath.Join(filepath.Dir(wd), "dist", "extenders", "agent_kharon", "src_beacon")
+-	fmt.Printf("DEBUG: Target path: %s\n", targetPath)
+-
+-	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+-		fmt.Printf("ERROR: Target path does not exist: %s\n", targetPath)
+-		return nil, "", fmt.Errorf("target path not found: %s", targetPath)
+-	}
+-
+ 	// SSL configuration
+ 	sslEnabled := false
+ 	if s, ok := listenerMap["ssl"].(bool); ok {
+@@ -229,294 +213,91 @@
+ 		fmt.Printf("DEBUG: Sleep time: %s\n", khSleep)
+ 	}
+ 
+-	// Escape and format ForkPipe
++	// Escape and format ForkPipe / Spawnto. These are passed to the sidecar as the
++	// raw (escaped) field values; the worker quotes them into the make variable, so
++	// the wire value matches the previous in-server make exactly.
+ 	forkPipe := cfg.ForkPipe
+ 	forkPipe = strings.ReplaceAll(forkPipe, `\`, `\\`)
+ 	forkPipe = strings.ReplaceAll(forkPipe, `"`, `\"`)
+-	forkPipeC := fmt.Sprintf("\"%s\"", forkPipe)
+ 
+-	// Escape and format Spawnto
+ 	spawnto := cfg.Spawnto
+ 	spawnto = strings.ReplaceAll(spawnto, `\`, `\\`)
+ 	spawnto = strings.ReplaceAll(spawnto, `"`, `\"`)
+ 
+ 	fmt.Printf("DEBUG: Spawnto (for make): %s\n", spawnto)
+ 
+-	// Build make variables
+-	makeVars := []string{
+-		fmt.Sprintf("WEB_SECURE_ENABLED=%d", bool_to_int(sslEnabled)),
+-		fmt.Sprintf("WEB_PROXY_ENABLED=%d", bool_to_int(proxyEnabled)),
+-		fmt.Sprintf("WEB_PROXY_URL=%s", proxyURL),
+-		fmt.Sprintf("WEB_PROXY_USERNAME=%s", proxyUser),
+-		fmt.Sprintf("WEB_PROXY_PASSWORD=%s", proxyPass),
+-
+-		fmt.Sprintf("KH_SLEEP_TIME=%s", khSleep),
+-		fmt.Sprintf("KH_JITTER=%d", cfg.Jitter),
+-		fmt.Sprintf("KH_AGENT_UUID=%s", uuid.New()),
+-
+-		fmt.Sprintf("KH_WORKTIME_ENABLED=%d", bool_to_int(cfg.WorkingTimeCheck)),
+-		fmt.Sprintf("KH_WORKTIME_START_HOUR=%d", workStartHour),
+-		fmt.Sprintf("KH_WORKTIME_START_MIN=%d", workStartMin),
+-		fmt.Sprintf("KH_WORKTIME_END_HOUR=%d", workEndHour),
+-		fmt.Sprintf("KH_WORKTIME_END_MIN=%d", workEndMin),
+-
+-		fmt.Sprintf("KH_KILLDATE_ENABLED=%d", bool_to_int(cfg.KilldateCheck)),
+-		fmt.Sprintf("KH_KILLDATE_DAY=%d", killdateDay),
+-		fmt.Sprintf("KH_KILLDATE_MONTH=%d", killdateMonth),
+-		fmt.Sprintf("KH_KILLDATE_YEAR=%d", killdateYear),
+-
+-		fmt.Sprintf("KH_FORK_PIPENAME=%s", forkPipeC),
+-		fmt.Sprintf("KH_SPAWNTO_X64=%s", spawnto),
+-
+-		fmt.Sprintf("KH_BOF_HOOK_ENABLED=%d", bool_to_int(cfg.BofApiProxy)),
+-
+-		// Malleable HTTP bytes como array C entre aspas
+-		fmt.Sprintf("HTTP_MALLEABLE_BYTES=\"%s\"", bytes_to_hexstr(malleableBytes)),
+-		fmt.Sprintf("HTTP_CALLBACK_COUNT=%d", callbackCount),
+-	}
+-
+-	// Guardrails
+-	if cfg.GuardUserName != "" {
+-		makeVars = append(makeVars, fmt.Sprintf("KH_GUARDRAILS_USER=%s", cfg.GuardUserName))
+-		fmt.Printf("DEBUG: Guardrail - Username: %s\n", cfg.GuardUserName)
+-	}
+-	if cfg.GuardDomainName != "" {
+-		makeVars = append(makeVars, fmt.Sprintf("KH_GUARDRAILS_DOMAIN=%s", cfg.GuardDomainName))
+-		fmt.Printf("DEBUG: Guardrail - Domain: %s\n", cfg.GuardDomainName)
+-	}
+-	if cfg.GuardHostName != "" {
+-		makeVars = append(makeVars, fmt.Sprintf("KH_GUARDRAILS_HOST=%s", cfg.GuardHostName))
+-		fmt.Printf("DEBUG: Guardrail - Hostname: %s\n", cfg.GuardHostName)
+-	}
+-	if cfg.GuardIpAddress != "" {
+-		makeVars = append(makeVars, fmt.Sprintf("KH_GUARDRAILS_IPADDRESS=%s", cfg.GuardIpAddress))
+-		fmt.Printf("DEBUG: Guardrail - IP Address: %s\n", cfg.GuardIpAddress)
+-	}
+-
+-	// Syscall flags
+-	fmt.Printf("DEBUG: Syscall method: %s\n", cfg.Syscall)
+-	switch cfg.Syscall {
+-	case "Stack Spoof + Indirect":
+-		makeVars = append(makeVars, "KH_SYSCALL=2")
+-	case "Stack Spoof":
+-		makeVars = append(makeVars, "KH_SYSCALL=1")
+-	default:
+-		makeVars = append(makeVars, "KH_SYSCALL=0")
+-	}
++	// Syscall / bypass / mask helpers (mapped below into the typed request fields).
++	syscallN := syscallIndex(cfg.Syscall)
++	bypassN := bypassIndex(cfg.Bypass)
++	sleepMaskN := sleepMaskIndex(cfg.MaskSleep)
+ 
+-	// AMSI + ETW bypass
+-	fmt.Printf("DEBUG: Bypass method: %s\n", cfg.Bypass)
+-	switch cfg.Bypass {
+-	case "AMSI":
+-		makeVars = append(makeVars, "KH_AMSI_ETW_BYPASS=0x1")
+-	case "ETW":
+-		makeVars = append(makeVars, "KH_AMSI_ETW_BYPASS=0x2")
+-	case "AMSI + ETW":
+-		makeVars = append(makeVars, "KH_AMSI_ETW_BYPASS=0x3")
+-	default:
+-		makeVars = append(makeVars, "KH_AMSI_ETW_BYPASS=0x0")
+-	}
+-
+-	// Heap obfuscation
+-	fmt.Printf("DEBUG: Mask heap: %v\n", cfg.MaskHeap)
+-	if cfg.MaskHeap {
+-		makeVars = append(makeVars, "KH_HEAP_MASK=1")
+-	} else {
+-		makeVars = append(makeVars, "KH_HEAP_MASK=0")
+-	}
+-
+-	// Sleep mask
+-	fmt.Printf("DEBUG: Sleep mask: %s\n", cfg.MaskSleep)
+-	switch strings.ToLower(cfg.MaskSleep) {
+-	case "timer":
+-		makeVars = append(makeVars, "KH_SLEEP_MASK=1")
+-	case "pooling":
+-		makeVars = append(makeVars, "KH_SLEEP_MASK=2")
+-	default:
+-		makeVars = append(makeVars, "KH_SLEEP_MASK=3")
+-	}
+-
+-	// Determine build target
++	// Determine build target.
+ 	debugMode := cfg.Debug
+ 	target := "x64"
+ 	if strings.EqualFold(cfg.Format, "x86") {
+ 		target = "x86"
+ 	}
+-	if debugMode {
+-		target = target + "-debug"
+-	}
+-
+ 	fmt.Printf("DEBUG: Build target: %s\n", target)
+ 
+-	fmt.Println("\n→ Make variables:")
+-	for _, v := range makeVars {
+-		fmt.Println("   ", v)
+-	}
+-
+-	// Execute make command
+-	allArgs := append([]string{"-C", targetPath, target}, makeVars...)
+-	cmd := exec.Command("make", allArgs...)
+-
+-	fmt.Printf("\nDEBUG: Running command: make %v\n", allArgs)
+-
+-	var stdOut, stdErr bytes.Buffer
+-	cmd.Stdout = &stdOut
+-	cmd.Stderr = &stdErr
+-
+-	fmt.Println("DEBUG: Executing make command...")
+-	if err := cmd.Run(); err != nil {
+-		fmt.Printf("ERROR: Make command failed: %v\n", err)
+-		fmt.Printf("STDOUT:\n%s\n", stdOut.String())
+-		fmt.Printf("STDERR:\n%s\n", stdErr.String())
+-		return nil, "", fmt.Errorf("make failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdOut.String(), stdErr.String())
+-	}
+-	fmt.Println("DEBUG: Make command completed successfully")
+-
+-	// Read compiled beacon
+-	outputFile := filepath.Join(targetPath, "Bin", fmt.Sprintf("Kharon.%s.bin", target))
+-	fmt.Printf("DEBUG: Reading output file: %s\n", outputFile)
+-
+-	bin, err := os.ReadFile(outputFile)
+-	if err != nil {
+-		fmt.Printf("ERROR: Failed to read output file %s: %v\n", outputFile, err)
+-		return nil, "", fmt.Errorf("failed to read output (%s): %v", outputFile, err)
+-	}
+-	fmt.Printf("DEBUG: Read %d bytes from output file\n", len(bin))
+-
+-	outFileName := ""
+-	var finalBin []byte
+-
+-	fmt.Printf("\nDEBUG: Processing format: %s\n", cfg.Format)
+-
+-	// Compile loader if needed
+-	if cfg.Format == "Exe" || cfg.Format == "Dll" || cfg.Format == "Svc" {
+-		fmt.Println("→ Compiling loader for format:", cfg.Format)
+-
+-		loaderPath := filepath.Join(filepath.Dir(wd), "dist", "extenders", "agent_kharon", "src_loader")
+-		fmt.Printf("DEBUG: Loader path: %s\n", loaderPath)
+-
+-		if _, err := os.Stat(loaderPath); os.IsNotExist(err) {
+-			fmt.Printf("ERROR: Loader path does not exist: %s\n", loaderPath)
+-			return nil, "", fmt.Errorf("loader path not found: %s", loaderPath)
+-		}
+-
+-		// Generate shellcode header
+-		shellcodeHeaderPath := filepath.Join(loaderPath, "Include", "Shellcode.h")
+-		fmt.Printf("DEBUG: Generating shellcode header at: %s\n", shellcodeHeaderPath)
+-
+-		shellcodeContent := gen_shelllcode_header(bin)
+-		fmt.Printf("DEBUG: Generated shellcode header (%d bytes)\n", len(shellcodeContent))
+-
+-		if err := os.WriteFile(shellcodeHeaderPath, []byte(shellcodeContent), 0644); err != nil {
+-			fmt.Printf("ERROR: Failed to write Shellcode.h: %v\n", err)
+-			return nil, "", fmt.Errorf("failed to write Shellcode.h: %v", err)
+-		}
+-		fmt.Println("→ Shellcode injected into:", shellcodeHeaderPath)
+-
+-		var sourceFile string
+-		var outputName string
+-
+-		switch cfg.Format {
+-		case "Exe":
+-			sourceFile = "Exe.cc"
+-			outputName = "Kharon.x64.exe"
+-		case "Dll":
+-			sourceFile = "Dll.cc"
+-			outputName = "Kharon.x64.dll"
+-		case "Svc":
+-			sourceFile = "Svc.cc"
+-			outputName = "Kharon.x64.svc.exe"
+-		}
+-
+-		fmt.Printf("DEBUG: Source file: %s, Output name: %s\n", sourceFile, outputName)
+-
+-		sourcePath := filepath.Join(loaderPath, "Source", "Main", sourceFile)
+-		outputPath := filepath.Join(loaderPath, "Bin", outputName)
+-
+-		if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+-			fmt.Printf("ERROR: Source file does not exist: %s\n", sourcePath)
+-			return nil, "", fmt.Errorf("source file not found: %s", sourcePath)
+-		}
+-
+-		binDir := filepath.Join(loaderPath, "Bin")
+-		if err := os.MkdirAll(binDir, 0755); err != nil {
+-			fmt.Printf("ERROR: Failed to create Bin directory: %v\n", err)
+-			return nil, "", fmt.Errorf("failed to create Bin directory: %v", err)
+-		}
+-		fmt.Printf("DEBUG: Created/verified Bin directory: %s\n", binDir)
+-
+-		includeDir := filepath.Join(loaderPath, "Include")
+-
+-		clangArgs := []string{
+-			"-target", "x86_64-w64-mingw32",
+-			"-I", includeDir,
+-			"-o", outputPath,
+-			sourcePath,
+-			"-Os",
+-			"-mwindows",
+-			"-nostdlib",
+-			"-s",
+-			"-lkernel32",
+-			"-ladvapi32",
+-		}
+-
+-		if cfg.Format == "Dll" {
+-			clangArgs = append(clangArgs, "-shared")
+-			fmt.Println("DEBUG: Added -shared flag for DLL compilation")
+-		}
+-
+-		fmt.Printf("→ Running clang++: %v\n", clangArgs)
+-
+-		clangCmd := exec.Command("clang++", clangArgs...)
+-		clangCmd.Stdout = &stdOut
+-		clangCmd.Stderr = &stdErr
+-
+-		fmt.Println("DEBUG: Executing clang++ command...")
+-		if err := clangCmd.Run(); err != nil {
+-			fmt.Printf("ERROR: clang++ command failed: %v\n", err)
+-			fmt.Printf("STDOUT:\n%s\n", stdOut.String())
+-			fmt.Printf("STDERR:\n%s\n", stdErr.String())
+-			return nil, "", fmt.Errorf("clang++ failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdOut.String(), stdErr.String())
+-		}
+-		fmt.Println("DEBUG: clang++ command completed successfully")
+-
+-		finalBin, err = os.ReadFile(outputPath)
+-		if err != nil {
+-			fmt.Printf("ERROR: Failed to read loader output %s: %v\n", outputPath, err)
+-			return nil, "", fmt.Errorf("failed to read loader output (%s): %v", outputPath, err)
+-		}
+-		fmt.Printf("DEBUG: Read %d bytes from loader output\n", len(finalBin))
+-
+-		outFileName = outputName
+-		fmt.Println("→ Loader compiled successfully:", outputPath)
+-	}
+-
+-	// Set output filename and final binary
+-	switch cfg.Format {
+-	case "Exe":
+-		outFileName = "Kharon.x64.exe"
+-	case "Dll":
+-		outFileName = "Kharon.x64.dll"
+-	case "Svc":
+-		outFileName = "Kharon.x64.svc.exe"
+-	case "Bin":
+-		outFileName = "Kharon.x64.bin"
+-		finalBin = bin
+-		fmt.Println("DEBUG: Using raw binary format")
+-	default:
+-		outFileName = fmt.Sprintf("Kharon.%s.bin", target)
+-		finalBin = bin
+-		fmt.Printf("DEBUG: Using default format with target: %s\n", target)
++	// ---- [ Kharon payload build is offloaded to the builder sidecar ] ----
++	// The server keeps the pure-Go generators (BuildMalleableHTTPBytes here, and
++	// gen_shelllcode_header in the worker) and derives the make variables exactly as
++	// before. All native compilation (the src_beacon make + optional src_loader
++	// clang++) and the Shellcode.h write now happen in the kharon-builder sidecar,
++	// reached over /run/kharon/builder.sock. The server never invokes a compiler or
++	// touches a source tree.
++	//
++	// This also removes the previous cwd-dependent path resolution (the old code
++	// resolved src_beacon/src_loader via os.Getwd()/dist/extenders/…), which was
++	// broken in the hardened runtime image where cwd is /app — a latent bug fixed
++	// as a side effect of offloading the build.
++	resp, _, buildErr := buildViaSidecar(&kharonbuilder.KharonBuildRequest{
++		Target:            target,
++		Debug:             debugMode,
++		OutputFormat:      kharonOutputFormat(cfg.Format),
++		WebSecureEnabled:  sslEnabled,
++		WebProxyEnabled:   proxyEnabled,
++		WebProxyURL:       proxyURL,
++		WebProxyUsername:  proxyUser,
++		WebProxyPassword:  proxyPass,
++		KhSleepTime:       khSleep,
++		KhJitter:          cfg.Jitter,
++		KhAgentUUID:       uuid.NewString(),
++		KhWorktimeEnabled: cfg.WorkingTimeCheck,
++		KhWorktimeStartH:  workStartHour,
++		KhWorktimeStartM:  workStartMin,
++		KhWorktimeEndH:    workEndHour,
++		KhWorktimeEndM:    workEndMin,
++		KhKilldateEnabled: cfg.KilldateCheck,
++		KhKilldateDay:     killdateDay,
++		KhKilldateMonth:   killdateMonth,
++		KhKilldateYear:    killdateYear,
++		KhForkPipeName:    forkPipe,
++		KhSpawnto:         spawnto,
++		KhBofHookEnabled:  cfg.BofApiProxy,
++		HTTPMalleableHex:  bytes_to_hexstr(malleableBytes),
++		HTTPCallbackCount: callbackCount,
++		KhGuardrailUser:   cfg.GuardUserName,
++		KhGuardrailDomain: cfg.GuardDomainName,
++		KhGuardrailHost:   cfg.GuardHostName,
++		KhGuardrailIP:     cfg.GuardIpAddress,
++		KhSyscall:         syscallN,
++		KhAmsiEtwBypass:   bypassN,
++		KhHeapMask:        cfg.MaskHeap,
++		KhSleepMask:       sleepMaskN,
++	})
++	if buildErr != nil {
++		return nil, "", fmt.Errorf("kharon: buildViaSidecar: %w", buildErr)
+ 	}
+ 
++	fmt.Printf("DEBUG: Sidecar build OK: %s (%d bytes)\n", resp.Filename, resp.Size)
+ 	fmt.Println("\n✓ Build completed successfully!")
+-	fmt.Printf("  Output file: %s\n", outFileName)
+-	fmt.Printf("  Final size: %d bytes\n", len(finalBin))
++	fmt.Printf("  Output file: %s\n", resp.Filename)
++	fmt.Printf("  Final size: %d bytes\n", resp.Size)
+ 	fmt.Println("=== AgentGenerateBuild END ===\n")
+ 
+-	return finalBin, outFileName, nil
++	return resp.Payload, resp.Filename, nil
+ }
+-
+ func GetWindowsVersionName(major uint32, minor uint32, build uint32) string {
+ 	if major == 10 && minor == 0 {
+ 		if build >= 22000 {
+@@ -1026,7 +807,7 @@
+ 				goto RET
+ 			}
+ 
+-			if ( len(kharon_cfg.Ps.Spoofarg) > 0 ) {
++			if len(kharon_cfg.Ps.Spoofarg) > 0 {
+ 				if len(programArgs) > len(kharon_cfg.Ps.Spoofarg) {
+ 					err = errors.New("Spoof argument needs be greater than legit args")
+ 					goto RET
+@@ -1775,7 +1556,7 @@
+ 			}
+ 
+ 			boolean := enabled == 1
+-			
++
+ 			kharon_cfg.Evasion.BofProxy = boolean
+ 			kharon_cfg.JsonMarshal(&agent, true)
+ 
+@@ -2030,7 +1811,7 @@
+ 			case CALLBACK_INFO:
+ 				task.MessageType = MESSAGE_INFO
+ 				task.Message = packer.ParseString()
+-			
++
+ 			default:
+ 				output := packer.ParseString()
+ 
+
+diff --git a/go.mod b/go.mod
+--- a/agent_kharon/go.mod
++++ b/agent_kharon/go.mod
+@@ -7,3 +7,11 @@
+ require github.com/Adaptix-Framework/axc2 v1.1.3
+ 
+ require github.com/google/uuid v1.6.0
++
++// The Kharon payload builder sidecar (github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder)
++// is a sibling module; pin it via a local replace so the agent module can import
++// kharonbuilder without shipping a published reference. See the Milestone 3 Kharon
++// sidecar spec (docs/superpowers/specs/2026-08-28-kharon-sidecar-spec.md).
++require github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder v0.0.0
++
++replace github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder => ../../../sidecar/kharon-builder
+
+diff --git a/src_server/pl_kharon_sidecar.go b/src_server/pl_kharon_sidecar.go
+new file mode 100644
+--- /dev/null	2026-08-29 22:48:27
++++ b/agent_kharon/src_server/pl_kharon_sidecar.go	2026-08-29 22:34:00
+@@ -0,0 +1,86 @@
++package main
++
++import (
++	"fmt"
++	"strings"
++
++	kharonbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder/kharonbuilder"
++)
++
++// buildViaSidecar dials the Kharon payload builder sidecar over its Unix socket,
++// sends the fully-derived *kharonbuilder.KharonBuildRequest (which carries the
++// server-derived make variables + build selection), reads the compiled payload
++// back, and returns it with the output filename. It never invokes a compiler or
++// touches a source tree — all native compilation (the src_beacon make + optional
++// src_loader clang++) happens in the sidecar.
++//
++// The socket path is resolved the usual way (ModuleDir/kharon_builder_socket, or
++// the /run/kharon/builder.sock fallback — see kharonbuilder.ResolveSocketPath).
++func buildViaSidecar(req *kharonbuilder.KharonBuildRequest) ([]byte, string, error) {
++	client := kharonbuilder.New(kharonbuilder.ResolveSocketPath(ModuleDir))
++	resp, err := client.Build(req)
++	if err != nil {
++		return nil, "", err
++	}
++	if resp == nil || !resp.OK {
++		return nil, "", fmt.Errorf("kharon: buildViaSidecar: builder returned no payload")
++	}
++	return resp.Payload, resp.Filename, nil
++}
++
++// kharonOutputFormat maps the operator-facing Format string (as sent by the
++// client: "Exe"/"Dll"/"Svc"/"Bin") onto the kharonbuilder OutputFormat values
++// ("exe"/"dll"/"svc"/"bin"). Anything else (including the empty string) is
++// treated as a raw PIC beacon ("bin"), matching the in-server default.
++func kharonOutputFormat(format string) string {
++	switch format {
++	case "Exe":
++		return "exe"
++	case "Dll":
++		return "dll"
++	case "Svc":
++		return "svc"
++	default:
++		return "bin"
++	}
++}
++
++// syscallIndex maps the syscall-method string onto the KH_SYSCALL value the
++// Makefile expects (0 = none, 1 = stack spoof, 2 = stack spoof + indirect).
++func syscallIndex(s string) int {
++	switch s {
++	case "Stack Spoof + Indirect":
++		return 2
++	case "Stack Spoof":
++		return 1
++	default:
++		return 0
++	}
++}
++
++// bypassIndex maps the AMSI/ETW-bypass string onto the KH_AMSI_ETW_BYPASS value.
++func bypassIndex(s string) int {
++	switch s {
++	case "AMSI":
++		return 0x1
++	case "ETW":
++		return 0x2
++	case "AMSI + ETW":
++		return 0x3
++	default:
++		return 0x0
++	}
++}
++
++// sleepMaskIndex maps the sleep-mask string onto the KH_SLEEP_MASK value. The
++// in-server default (when the client sends nothing recognized) is 3.
++func sleepMaskIndex(s string) int {
++	switch strings.ToLower(s) {
++	case "timer":
++		return 1
++	case "pooling":
++		return 2
++	default:
++		return 3
++	}
++}
+
+diff --git a/src_server/pl_kharon_sidecar_test.go b/src_server/pl_kharon_sidecar_test.go
+new file mode 100644
+--- /dev/null	2026-08-29 22:48:27
++++ b/agent_kharon/src_server/pl_kharon_sidecar_test.go	2026-08-29 22:34:00
+@@ -0,0 +1,196 @@
++package main
++
++import (
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++
++	kharonbuilder "github.com/entropy-z/AdaptixC2-Omni/sidecar/kharon-builder/kharonbuilder"
++)
++
++// fakeKharonBuilder starts an in-process server-side stub that reads one
++// KharonBuildRequest, records it via the provided sink, and replies with a canned
++// payload — so buildViaSidecar can be tested end-to-end without any compiler or
++// real source tree.
++func fakeKharonBuilder(t *testing.T, sockPath string, captured **kharonbuilder.KharonBuildRequest) {
++	t.Helper()
++	l, err := net.Listen("unix", sockPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = l.Close() })
++	go func() {
++		for {
++			conn, err := l.Accept()
++			if err != nil {
++				return
++			}
++			go func(conn net.Conn) {
++				defer conn.Close()
++				_ = kharonbuilder.ServeConn(conn, func(req *kharonbuilder.KharonBuildRequest) (*kharonbuilder.KharonBuildResponse, error) {
++					if captured != nil {
++						*captured = req
++					}
++					return &kharonbuilder.KharonBuildResponse{
++						OK:       true,
++						Filename: "Kharon.x64.exe",
++						Payload:  []byte("FAKEKHARONPAYLOAD"),
++					}, nil
++				})
++			}(conn)
++		}
++	}()
++}
++
++// TestBuildViaSidecarThroughFakeBuilder wires buildViaSidecar at an in-process
++// fake builder (via ModuleDir/kharon_builder_socket) and asserts the repacked
++// payload/filename match the canned response.
++func TestBuildViaSidecarThroughFakeBuilder(t *testing.T) {
++	dir := t.TempDir()
++	sockPath := "/tmp/kharon_sidecar_test.sock" // short path: macOS sun_path is capped at 104 bytes
++	if err := os.WriteFile(filepath.Join(dir, "kharon_builder_socket"), []byte(sockPath), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	origModuleDir := ModuleDir
++	ModuleDir = dir
++	t.Cleanup(func() {
++		ModuleDir = origModuleDir
++		_ = os.Remove(sockPath)
++	})
++
++	fakeKharonBuilder(t, sockPath, nil)
++
++	resp, name, err := buildViaSidecar(&kharonbuilder.KharonBuildRequest{Target: "x64", OutputFormat: "exe"})
++	if err != nil {
++		t.Fatalf("buildViaSidecar: %v", err)
++	}
++	if name != "Kharon.x64.exe" {
++		t.Fatalf("filename = %q, want %q", name, "Kharon.x64.exe")
++	}
++	if string(resp) != "FAKEKHARONPAYLOAD" {
++		t.Fatalf("payload = %q, want %q", string(resp), "FAKEKHARONPAYLOAD")
++	}
++}
++
++// TestBuildViaSidecarCapturesRequest asserts the server derives the request fields
++// the worker relies on (target, output format, and the make-variable fields) and
++// forwards them verbatim over the socket.
++func TestBuildViaSidecarCapturesRequest(t *testing.T) {
++	dir := t.TempDir()
++	sockPath := "/tmp/kharon_sidecar_test.sock"
++	if err := os.WriteFile(filepath.Join(dir, "kharon_builder_socket"), []byte(sockPath), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	origModuleDir := ModuleDir
++	ModuleDir = dir
++	t.Cleanup(func() {
++		ModuleDir = origModuleDir
++		_ = os.Remove(sockPath)
++	})
++
++	var got *kharonbuilder.KharonBuildRequest
++	fakeKharonBuilder(t, sockPath, &got)
++
++	wantReq := &kharonbuilder.KharonBuildRequest{
++		Target:            "x86",
++		Debug:             true,
++		OutputFormat:      "dll",
++		WebSecureEnabled:  true,
++		WebProxyEnabled:   false,
++		WebProxyURL:       "http://proxy:8080",
++		KhSleepTime:       "5",
++		KhJitter:          20,
++		KhAgentUUID:       "agent-uuid",
++		KhWorktimeEnabled: true,
++		KhWorktimeStartH:  8,
++		KhWorktimeStartM:  30,
++		KhWorktimeEndH:    17,
++		KhWorktimeEndM:    0,
++		KhKilldateEnabled: true,
++		KhKilldateDay:     15,
++		KhKilldateMonth:   6,
++		KhKilldateYear:    2027,
++		KhForkPipeName:    `pipe\name`,
++		KhSpawnto:         `notepad.exe`,
++		KhBofHookEnabled:  true,
++		HTTPMalleableHex:  "deadbeef",
++		HTTPCallbackCount: 3,
++		KhGuardrailUser:   "svc",
++		KhGuardrailDomain: "corp.local",
++		KhGuardrailHost:   "host",
++		KhGuardrailIP:     "10.0.0.1",
++		KhSyscall:         2,
++		KhAmsiEtwBypass:   0x3,
++		KhHeapMask:        true,
++		KhSleepMask:       1,
++	}
++
++	if _, _, err := buildViaSidecar(wantReq); err != nil {
++		t.Fatalf("buildViaSidecar: %v", err)
++	}
++	if got == nil {
++		t.Fatal("fake builder never received a request")
++	}
++	// Deep-compare every field the worker maps onto the make invocation + build
++	// selection; a mismatch means the beacon won't compile/parse the profile.
++	if *got != *wantReq {
++		t.Fatalf("captured request mismatch:\n got  %+v\n want %+v", *got, *wantReq)
++	}
++}
++
++// TestBuildViaSidecarBuilderAbsent asserts a clear error when no builder is
++// listening on the socket.
++func TestBuildViaSidecarBuilderAbsent(t *testing.T) {
++	_, _, err := buildViaSidecar(&kharonbuilder.KharonBuildRequest{Target: "x64", OutputFormat: "bin"})
++	if err == nil {
++		t.Fatal("expected builder-absence error")
++	}
++}
++
++// TestKharonOutputFormatMapper covers the Format -> OutputFormat mapping.
++func TestKharonOutputFormatMapper(t *testing.T) {
++	cases := map[string]string{
++		"Exe":   "exe",
++		"Dll":   "dll",
++		"Svc":   "svc",
++		"Bin":   "bin",
++		"":      "bin",
++		"WEIRD": "bin",
++	}
++	for in, want := range cases {
++		if got := kharonOutputFormat(in); got != want {
++			t.Errorf("kharonOutputFormat(%q) = %q, want %q", in, got, want)
++		}
++	}
++}
++
++// TestKharonIndexMappers covers the syscall / bypass / sleep-mask string mappers.
++func TestKharonIndexMappers(t *testing.T) {
++	if got := syscallIndex("Stack Spoof + Indirect"); got != 2 {
++		t.Errorf("syscallIndex = %d, want 2", got)
++	}
++	if got := syscallIndex("Stack Spoof"); got != 1 {
++		t.Errorf("syscallIndex = %d, want 1", got)
++	}
++	if got := syscallIndex(""); got != 0 {
++		t.Errorf("syscallIndex = %d, want 0", got)
++	}
++
++	if got := bypassIndex("AMSI + ETW"); got != 0x3 {
++		t.Errorf("bypassIndex = 0x%x, want 0x3", got)
++	}
++	if got := bypassIndex("none"); got != 0x0 {
++		t.Errorf("bypassIndex = 0x%x, want 0x0", got)
++	}
++
++	if got := sleepMaskIndex("timer"); got != 1 {
++		t.Errorf("sleepMaskIndex = %d, want 1", got)
++	}
++	if got := sleepMaskIndex("POOLING"); got != 2 {
++		t.Errorf("sleepMaskIndex = %d, want 2", got)
++	}
++	if got := sleepMaskIndex(""); got != 3 {
++		t.Errorf("sleepMaskIndex = %d, want 3", got)
++	}
++}

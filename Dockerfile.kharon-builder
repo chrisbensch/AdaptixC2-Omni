@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1.7
+#
+# Kharon builder sidecar image (Milestone 3).
+#
+# The Kharon agent plugin (in the teamserver) sends a build request over a unix
+# socket; this image owns the actual compilation. It carries its own pinned
+# Kharon source + cross-compile toolchain, so the teamserver image stays lean —
+# no Kharon source tree and no compiler in the server image (the toolchain fully
+# leaves the server here).
+#
+# Layout:
+#   /app/kharon      the pinned Kharon source tree (agent_kharon/ renamed so the
+#                    worker sees a clean, fixed path). The worker `make`-builds the
+#                    PIC beacon under src_beacon/ and, for exe/dll/svc, compiles the
+#                    loader PE under src_loader/.
+#   /kharon-builder  the static worker binary (one request/response per connection)
+#   /run/kharon      the shared socket dir (a named volume in compose). The worker
+#                    writes the unix socket here; the teamserver dials it.
+#
+# Build context: workspace root (same as the main Dockerfile).
+# The builder does NOT talk to the outside network (network_mode: none in
+# compose) — only the shared /run/kharon volume carries the socket to the
+# teamserver.
+
+# ============================================
+# Stage: build — compile the kharon-builder worker binary
+# ============================================
+# Same pinned golang base as the main Dockerfile. The cross-compile toolchain
+# lives in the runtime stage below, so the build stage stays lean and fast.
+FROM golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GOEXPERIMENT=jsonv2,greenteagc
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        make \
+        build-essential \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY sidecar /src/sidecar
+RUN cd /src/sidecar/kharon-builder && \
+    go build -ldflags="-s -w" -o /kharon-builder ./cmd/kharon-builder
+
+# ============================================
+# Stage: runtime — toolchain + pinned Kharon source + worker binary
+# ============================================
+# Pinned by digest. Same rationale as the main Dockerfile; bump on refresh.
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Cross-compile toolchain (mingw-w64 PE) + build support. The worker runs
+# `make x64|x86` for the PIC beacon (clang++ + nasm) and invokes clang++ for the
+# loader PE wrapper (exe/dll/svc). The i686 mingw is needed for the x86 beacon
+# target. `x86_64-w64-mingw32-objcopy` (provided by the x86_64 mingw package) is
+# used explicitly — on arm64 hosts the default `objcopy` is an ARM triple that
+# cannot read x86-64 PE files, so the beacon .bin comes out 0 bytes without it.
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        make \
+        binutils \
+        clang \
+        nasm \
+        g++-mingw-w64-x86-64 \
+        g++-mingw-w64-i686 \
+        python3 \
+        patch \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Dedicated non-root UID for the builder (10003; Nax is 10002, server is 10001).
+RUN groupadd --system --gid 10003 kharonb && \
+    useradd  --system --uid 10003 --gid kharonb \
+             --no-create-home --shell /usr/sbin/nologin kharonb
+
+WORKDIR /app/kharon
+
+# The pinned Kharon source tree (agent_kharon/ with src_beacon + src_loader). Baked
+# at a fixed path so the worker's paths are deterministic (no cwd resolution).
+COPY Kharon/agent_kharon .
+
+# On arm64 hosts the default `objcopy` is an ARM triple that cannot read the x86-64
+# PE the beacon Makefile links, so `objcopy --dump-section .text=…bin` fails and the
+# beacon .bin comes out 0 bytes. Point both objcopy invocations at the x86_64 tool
+# (provided by g++-mingw-w64-x86-64). Patch paths are relative to the Kharon root;
+# -p1 strips the a/ prefix. Applied before `make prebuild`.
+COPY patches/kharon-beacon-objcopy.patch /kharon-beacon-objcopy.patch
+RUN cd /app/kharon && patch -p1 --forward < /kharon-beacon-objcopy.patch
+
+# Prebuild the invariant beacon .o files at image build, so runtime `make x64|x86`
+# only compiles Config.cc + links (seconds not minutes). Run BOTH prebuilds — the
+# plugin Makefile's `agent` target only runs prebuild-x64, but the builder needs
+# both so an x86 beacon build is fast too. Non-fatal (a hiccup here shouldn't fail
+# the image).
+RUN cd /app/kharon && \
+    make -C src_beacon prebuild-x64 prebuild-x86 --no-print-directory \
+    || echo "[!] builder prebuild had warnings (non-fatal)"
+
+# The static worker binary + hand the tree to the builder user.
+COPY --from=build /kharon-builder /kharon-builder
+RUN chown -R kharonb:kharonb /app/kharon && chmod 0755 /kharon-builder
+
+# The shared /run/kharon (the socket) is a named volume in compose (writable there).
+# The worker writes the unix socket into it; the teamserver dials it.
+ENV KHARON_SRC=/app/kharon
+ENV KHARON_BUILDER_SOCK=/run/kharon/builder.sock
+
+ENTRYPOINT ["/kharon-builder"]

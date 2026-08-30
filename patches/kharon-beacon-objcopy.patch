@@ -1,0 +1,17 @@
+--- a/src_beacon/Makefile
++++ b/src_beacon/Makefile
+@@ -105,7 +105,7 @@ x64: prebuild-x64 $(CONFIG_OBJ64)
+ 	@ echo "[*] Linking x64..."
+ 	@ $(CCX64) $(OBJ64_FINAL) -o $(BUILD_PATH)/Bin/$(NAME).x64.exe $(CFLAGS)
+-	@ objcopy --dump-section .text=$(BUILD_PATH)/Bin/$(NAME).x64.bin $(BUILD_PATH)/Bin/$(NAME).x64.exe
++	@ x86_64-w64-mingw32-objcopy --dump-section .text=$(BUILD_PATH)/Bin/$(NAME).x64.bin $(BUILD_PATH)/Bin/$(NAME).x64.exe
+ 	@ rm $(BUILD_PATH)/Bin/$(NAME).x64.exe
+ 	@ echo "[✓] Build x64 completed"
+ x86: prebuild-x86 $(CONFIG_OBJ86)
+@@ -113,7 +113,7 @@ x86: prebuild-x86 $(CONFIG_OBJ86)
+ 	@ echo "[*] Linking x86..."
+ 	@ $(CCX86) $(OBJ86_FINAL) -o $(BUILD_PATH)/Bin/$(NAME).x86.exe $(CFLAGS)
+-	@ objcopy --dump-section .text=$(BUILD_PATH)/Bin/$(NAME).x86.bin $(BUILD_PATH)/Bin/$(NAME).x86.exe
++	@ x86_64-w64-mingw32-objcopy --dump-section .text=$(BUILD_PATH)/Bin/$(NAME).x86.bin $(BUILD_PATH)/Bin/$(NAME).x86.exe
+ 	@ rm $(BUILD_PATH)/Bin/$(NAME).x86.exe
+ 	@ echo "[✓] Build x86 completed"
