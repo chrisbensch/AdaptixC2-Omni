@@ -143,6 +143,22 @@ RUN cd /src/AdaptixC2/AdaptixServer/extenders && \
 RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
     patch -p2 --verbose < /src/patches/kharon-core-mingw-compat.patch
 
+# Route agent_kharon's AgentGenerateBuild through the kharon-builder sidecar
+# (dial /run/kharon/builder.sock). Headers are a/agent_kharon/... so -p2 from
+# extendsers/agent_kharon lands the files in the right place, matching the
+# kharon-core-mingw-compat patch above. Applied before go work sync so the
+# patched go.mod's sidecar replace resolves into the workspace.
+RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
+    patch -p2 --verbose < /src/patches/adaptix-kharon-sidecar.patch
+
+# The agent_kharon Makefile's default `all: clean plugin agent` target also runs the
+# `agent` step, which `make`-builds the PIC beacon (src_beacon) in-server. That build
+# is offloaded to the kharon-builder sidecar (it dials /run/kharon at runtime), so drop
+# `agent` from `all` here — `make extenders` then only compiles the Go plugin. The
+# beacon C++ sources still ship in the kharon-builder image (see Dockerfile.kharon-builder).
+RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
+    patch -p2 --verbose < /src/patches/adaptix-kharon-makefile.patch
+
 RUN cd /src/AdaptixC2/AdaptixServer && \
     # The copied go.work carries two entries from the local repo layout
     # (../../NaX/src_server/agent_nonameax, ../../sidecar/nax-builder) that are
@@ -157,29 +173,27 @@ RUN cd /src/AdaptixC2/AdaptixServer && \
     go work use ./extenders/agent_kharon ./extenders/listener_kharon_http \
                 ./extenders/agent_nonameax ./extenders/listener_nonameax_http \
                 ./extenders/listener_nonameax_smb ./extenders/service_nax_store \
-                ../sidecar/nax-builder && \
+                ../sidecar/nax-builder ../sidecar/kharon-builder && \
     go work sync
 
 # Build adaptixserver + every extender plugin (default 7 + Kharon 2 = 9).
 RUN make -C /src/AdaptixC2 server-ext
 
-# Build the Kharon beacon itself (clang + nasm). Plugin already built via 'make extenders';
-# this target compiles the PIC beacon source under src_beacon/ and stages it into the
-# extender's dist/ for runtime payload generation.
-RUN make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon agent
-
 # Build the Kharon core BOF modules. These are precompiled .x64.o files
 # loaded by LoadExtModule() at command execution time (ps list, ls, etc.).
 # They're invariant across deployments — no per-payload Config.cc here.
+# NOTE: the PIC beacon (src_beacon) and loader wrappers (src_loader) now compile
+# in the kharon-builder sidecar, not here — so the old `make agent` beacon build
+# is removed. The dist reconciliation below now only carries the plugin .so.
 RUN make -C /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_core
 
 # Two-pass dist reconciliation (intentional — do not collapse without verifying):
 #   - `make server-ext` (above) builds the Go plugin and moves the extender's
 #     dist into /src/AdaptixC2/dist/extenders/agent_kharon.
-#   - `make agent` (above, in the extender source tree) compiles the PIC beacon
-#     under src_beacon/ and re-stages it into the *source* dist/ directory.
+#   - The beacon .bin now builds in the kharon-builder sidecar; the agent
+#     extender's dist/ still carries the plugin .so and any staged artifacts.
 # We copy the second-pass artifacts back over the first-pass layout so the
-# runtime image ships the beacon binaries alongside the plugin .so.
+# runtime image ships the plugin .so alongside its staged artifacts.
 RUN if [ -d /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist ]; then \
         cp -r /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/dist/. \
               /src/AdaptixC2/dist/extenders/agent_kharon/; \
@@ -263,13 +277,6 @@ RUN apt-get update && \
         curl \
         gosu \
         libcap2-bin \
-        clang \
-        nasm \
-        make \
-        binutils \
-        g++-mingw-w64-x86-64 \
-        g++-mingw-w64-i686 \
-        python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # `apt-get upgrade -y` above pulls Debian security updates into the base
@@ -291,7 +298,11 @@ RUN groupadd --system --gid 10001 adaptix && \
     # Join the server to the builder's `naxb` group (10002) so it can read the
     # builder's 0o600 unix socket on the shared /run/nax volume. The server still
     # runs as 10001/adaptix; naxb is just its socket-reading group.
-    usermod -a -G naxb adaptix
+    groupadd --system --gid 10003 kharonb && \
+    # Join the server to the kharon builder's `kharonb` group (10003) so it can
+    # read the builder's 0o660 unix socket on the shared /run/kharon volume. The
+    # server still runs as 10001/adaptix; kharonb is just its socket-reading group.
+    usermod -a -G kharonb adaptix
 
 WORKDIR /app
 
@@ -311,25 +322,21 @@ COPY docker/404page.html /app/404page.html
 COPY --from=build-bofs /src/Extension-Kit  /app/Extension-Kit
 COPY --from=build-bofs /src/PostEx-Arsenal /app/PostEx-Arsenal
 
-# Kharon runtime compilation source trees. AgentGenerateBuild compiles
-# Config.cc + links the beacon at runtime with per-deployment defines,
-# compiles loader wrappers (Exe/Dll/Svc) via clang++, and loads precompiled
-# BOF modules (src_core/dist/*.x64.o) at command execution time.
-# The build-server stage already precompiled the invariant .o files in
-# src_beacon/Bin/obj/ and src_core/dist/ — these come along with the COPY.
-COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_beacon \
-     /app/extenders/agent_kharon/src_beacon
-COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_loader \
-     /app/extenders/agent_kharon/src_loader
+# Kharon runtime source trees. The PIC beacon (src_beacon) and loader wrappers
+# (src_loader) now compile in the kharon-builder sidecar over /run/kharon, not
+# here — so these trees no longer ship in the server image. Only the precompiled
+# core BOFs (src_core/dist/*.x64.o) load at command-execution time and are built
+# per-deployment in the build-server stage.
 COPY --from=build-server /src/AdaptixC2/AdaptixServer/extenders/agent_kharon/src_core   \
      /app/extenders/agent_kharon/src_core
 
-# NaX payload generation now goes through the builder sidecar (the agent .so
+# NaX payload generation goes through the nax-builder sidecar (the agent .so
 # dials /run/nax/builder.sock; the builder image carries the NaX source tree +
-# cross toolchain and does the make/compile). So the server image no longer ships
-# the full /app/NaX source tree — that lives in the builder image now. The
-# server's own Kharon src trees (below) still compile in-server; the toolchain
-# fully leaves the server in Milestone 3.
+# cross toolchain and does the make/compile). The Kharon beacon/loader now goes
+# through the kharon-builder sidecar the same way. So the server image no longer
+# ships the NaX or Kharon source trees — those live in the builder images. The
+# toolchain has fully left the server (Milestone 3), which is what enables
+# read_only: true by default.
 RUN chown -R adaptix:adaptix /app/extenders
 
 # Profile template + Kharon listener template. The runtime profile is rendered

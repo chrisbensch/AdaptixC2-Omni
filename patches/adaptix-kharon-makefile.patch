@@ -1,0 +1,10 @@
+--- a/agent_kharon/Makefile
++++ b/agent_kharon/Makefile
+@@ -17,7 +17,7 @@
+ 
+ PLUGIN_OUT := $(DIST_DIR)/agent_kharon.so
+ 
+-all: clean plugin agent
++all: clean plugin
+ 
+ plugin: $(PLUGIN_OUT)
