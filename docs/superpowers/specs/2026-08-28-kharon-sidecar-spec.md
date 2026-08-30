@@ -5,8 +5,19 @@ sidecar, reusing the Milestone-2 Nax pattern. All design decisions are confirmed
 this is the complete design document. Reference implementation:
 `sidecar/nax-builder/` (package `naxbuilder`).
 
-> **State:** design complete, implementation pending. No code written for
-> Milestone 3 yet.
+> **State:** design complete; the sidecar implementation already exists but is
+> **uncommitted and unwired**. This file is the source of truth for the
+> implementation plan, which is primarily *wiring-in* + commit + docs, not a
+> from-scratch build.
+>
+> **Already implemented (uncommitted, in the working tree):**
+> - `sidecar/kharon-builder/` — full module (`kharonbuilder`: frame/request/worker/build/pe + tests).
+> - `Dockerfile.kharon-builder` — standalone builder image (with the arm64 objcopy fix baked in).
+> - `patches/adaptix-kharon-sidecar.patch` — server integration (4 hunks).
+> - `patches/kharon-beacon-objcopy.patch` — arm64 objcopy fix.
+> - `tmp_pl_kharon_sidecar.go` / `tmp_pl_kharon_sidecar_test.go` — root scratch prototypes (to be removed).
+>
+> **Not yet done:** main-Dockerfile runtime slimming, `docker-compose.yml` service + volume, CI smoke test, README/BLUEPRINT updates.
 >
 > **Parent status doc:** `2026-08-28-kharon-sidecar-status.md` (open questions +
 > confirmed decisions + session-3 research findings). This file expands those into
@@ -85,10 +96,13 @@ the agent's per-payload beacon (+ optional loader) build moves.
 7. Return `(finalBin, outFileName, nil)`.
 
 **What moves to the sidecar:** steps 5 (make) + 6 (Shellcode.h write + clang++).
-**What stays in-server:** steps 2 (malleable bytes), 4 (parsing/escaping), 7
-(return contract). The server keeps the pure-Go generators (`BuildMalleableHTTPBytes`,
-`gen_shelllcode_header`, `bool_to_int`, `bytes_to_hexstr`) and passes their outputs
-into the build request.
+**What stays in-server:** step 2 (malleable bytes), step 4 (parsing/escaping), step 7
+(return contract). The server keeps the pure-Go `BuildMalleableHTTPBytes` and passes
+its outputs (malleable hex + callback count) into the build request. Under the
+preferred Option A (§8), `gen_shelllcode_header` does **not** stay in-server — the
+sidecar ports it as `kharonbuilder.generateKharonShellcodeH` (`kharonbuilder/pe.go`)
+and generates `Shellcode.h` itself from the beacon it builds. (`bool_to_int` and
+`bytes_to_hexstr` are helpers folded into the server's request construction.)
 
 ---
 
@@ -371,24 +385,40 @@ the Nax `pl_nax_sidecar.go` / `buildViaSidecar` pattern exactly:
    - On success → return `(resp.Payload, resp.Filename, nil)`.
 5. Never invokes a compiler or reads/writes a source tree in-server.
 
-### 9.2 Patch file — `patches/adaptix-kharon-sidecar-*.patch`
+### 9.2 Patch file — `patches/adaptix-kharon-sidecar.patch`
 
-Applied in the `build-server` stage with `patch -p2` (same convention as the Nax
-task6 patch). Three hunks:
+Applied in the `build-server` stage with `patch -p2`, from `extenders/agent_kharon/`
+(e.g. `RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && patch -p2 < <patch>`),
+exactly as `patches/kharon-core-mingw-compat.patch` is applied. **Four hunks:**
 
-1. **`go.mod` replace** — add a local `replace` from the agent module to
-   `../../../sidecar/kharon-builder`, so the agent module can import
-   `kharonbuilder` without shipping a published reference.
-2. **`pl_agent.go`** — add import + rewrite `AgentGenerateBuild` to derive the
-   request and delegate to `buildViaSidecar` (drop the in-server `make` + `clang++`
-   + path resolution).
-3. **`pl_kharon_sidecar_test.go`** — in-process fake builder over a unix socket;
-   assert the derived request fields and the repacked return value.
+1. **`src_server/pl_agent.go`** — add import + rewrite `AgentGenerateBuild` to derive
+   the request and delegate to `buildViaSidecar` (drop the in-server `make` +
+   `clang++` + cwd-dependent path resolution).
+2. **`go.mod`** — add a local `replace` from the agent module to
+   `../../../sidecar/kharon-builder`, so the agent module can import `kharonbuilder`
+   without shipping a published reference.
+3. **`src_server/pl_kharon_sidecar.go`** (**new file**) — `buildViaSidecar(req)`:
+   dial → send request → repack; never invokes a compiler or touches a source tree.
+4. **`src_server/pl_kharon_sidecar_test.go`** (**new file**) — in-process fake builder
+   over a unix socket; assert the derived request fields and the repacked return value.
 
-Patch paths are relative to the Kharon submodule root (`src_server/…`); `-p2` drops
-the `a/` prefix + `src_server/` so the files land in
-`extenders/agent_kharon/`. Applied before `go work sync` so the patched go.mod's
-sidecar `replace` resolves into the workspace.
+**Patch path convention (corrected).** Headers are relative to the Kharon submodule
+root and **include the `agent_kharon/` component**, applied from
+`extenders/agent_kharon/` with `-p2` (matching `kharon-core-mingw-compat.patch`):
+
+```
+a/agent_kharon/src_server/pl_agent.go
+a/agent_kharon/go.mod
+a/agent_kharon/src_server/pl_kharon_sidecar.go
+a/agent_kharon/src_server/pl_kharon_sidecar_test.go
+```
+
+`-p2` drops `a/` + `agent_kharon/` so the files land in
+`extenders/agent_kharon/src_server/…` (and `go.mod` in `extenders/agent_kharon/`).
+Applying the old header `a/src_server/pl_agent.go` with `-p2` from
+`extenders/agent_kharon/` is **wrong** — it would leave a stray
+`extenders/agent_kharon/pl_agent.go` and never modify the real file. Applied before
+`go work sync` so the patched go.mod's sidecar `replace` resolves into the workspace.
 
 ### 9.3 `kharon_builder_socket` file
 
@@ -410,6 +440,13 @@ Mirrors `Dockerfile.nax-builder` shape:
   `g++-mingw-w64-x86-64`, `g++-mingw-w64-i686`, `python3`, `patch`.
   Dedicated non-root user **`kharonb` (UID/GID 10003)** — distinct from Nax's
   `naxb` (10002).
+- **⚠ arm64 objcopy fix (required, baked at image build).** On arm64 hosts the
+  default `objcopy` is an ARM triple that cannot read the x86-64 PE the beacon
+  Makefile links, so `objcopy --dump-section .text=…` fails and the `.bin` comes
+  out 0 bytes. `patches/kharon-beacon-objcopy.patch` forces both beacon objcopy
+  calls to `x86_64-w64-mingw32-objcopy` (from `g++-mingw-w64-x86_64`). Applied to
+  `src_beacon/Makefile` with `patch -p1` before `make prebuild`. Without it, x64
+  beacon builds are silently empty on arm64.
 - `COPY Kharon /app/kharon` — bakes `src_beacon` + `src_loader` at a fixed path
   (`/app/kharon/…`), so the worker's paths are deterministic (no cwd resolution).
 - Apply the Kharon BOF mingw-w64 Bookworm compat patch to `src_core` if needed for
