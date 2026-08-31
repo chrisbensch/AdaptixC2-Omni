@@ -143,14 +143,6 @@ RUN cd /src/AdaptixC2/AdaptixServer/extenders && \
 RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
     patch -p2 --verbose < /src/patches/kharon-core-mingw-compat.patch
 
-# Route agent_kharon's AgentGenerateBuild through the kharon-builder sidecar
-# (dial /run/kharon/builder.sock). Headers are a/agent_kharon/... so -p2 from
-# extendsers/agent_kharon lands the files in the right place, matching the
-# kharon-core-mingw-compat patch above. Applied before go work sync so the
-# patched go.mod's sidecar replace resolves into the workspace.
-RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
-    patch -p2 --verbose < /src/patches/adaptix-kharon-sidecar.patch
-
 # The agent_kharon Makefile's default `all: clean plugin agent` target also runs the
 # `agent` step, which `make`-builds the PIC beacon (src_beacon) in-server. That build
 # is offloaded to the kharon-builder sidecar (it dials /run/kharon at runtime), so drop
@@ -158,6 +150,19 @@ RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
 # beacon C++ sources still ship in the kharon-builder image (see Dockerfile.kharon-builder).
 RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
     patch -p2 --verbose < /src/patches/adaptix-kharon-makefile.patch
+
+# Route agent_kharon's AgentGenerateBuild through the kharon-builder sidecar
+# (dial /run/kharon/builder.sock). Headers are a/agent_kharon/... so -p2 from
+# extendsers/agent_kharon lands the files in the right place, matching the
+# kharon-core-mingw-compat patch above. Applied before go work sync so the
+# patched go.mod's sidecar replace resolves into the workspace.
+#
+# Order matters: the makefile patch above is a 1-for-1 edit (no line shift), so the
+# sidecar patch's PLUGIN_FILES context below it stays byte-identical. Applied this
+# way both patches match under strict `git apply` (not just GNU patch's fuzzy
+# context), which keeps `patch --check`/CI reproducible.
+RUN cd /src/AdaptixC2/AdaptixServer/extenders/agent_kharon && \
+    patch -p2 --verbose < /src/patches/adaptix-kharon-sidecar.patch
 
 RUN cd /src/AdaptixC2/AdaptixServer && \
     # The copied go.work carries two entries from the local repo layout
