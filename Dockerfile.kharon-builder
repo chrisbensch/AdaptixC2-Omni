@@ -79,6 +79,13 @@ RUN groupadd --system --gid 10003 kharonb && \
 
 WORKDIR /app/kharon
 
+# The shared socket dir. Creating it (owned by the builder user) here makes the
+# compose named volume inherit kharonb ownership on first mount — a volume mounted
+# into an image dir that the builder can't otherwise write to would make the
+# `bind unix` below fail with "permission denied". The worker only writes the
+# socket file here; the server (joined to kharonb) dials it over the shared volume.
+RUN mkdir -p /run/kharon && chown kharonb:kharonb /run/kharon
+
 # The pinned Kharon source tree (agent_kharon/ with src_beacon + src_loader). Baked
 # at a fixed path so the worker's paths are deterministic (no cwd resolution).
 COPY Kharon/agent_kharon .

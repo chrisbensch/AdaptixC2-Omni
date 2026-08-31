@@ -19,6 +19,10 @@ var buildMu sync.Mutex
 // request/response exchange per connection using handleRequest. It blocks until
 // the listener fails or is closed.
 func StartListener(sockPath string) {
+	// Clear a stale socket node left by a previous run (crash or redeploy without a
+	// clean shutdown). Otherwise net.Listen fails with "address already in use" on
+	// the leftover socket file. Best-effort: a missing file is fine.
+	_ = os.Remove(sockPath)
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
 		panic(fmt.Errorf("builder: listen on %q: %w", sockPath, err))
