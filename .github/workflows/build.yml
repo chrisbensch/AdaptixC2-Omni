@@ -27,9 +27,10 @@ jobs:
         # Mirrors the hardened posture from docker-compose.yml so CI catches
         # regressions in privilege reduction: cap_drop=ALL with only the four
         # caps the entrypoint + listeners genuinely need, and no-new-privileges.
-        # read_only stays off by default (Kharon compiles payloads at runtime,
-        # which needs a writable rootfs); see the ADAPTIX_READ_ONLY override.
-        # Healthcheck reaching `healthy` implies the server bound 4321
+        # read_only stays off here (override with ADAPTIX_READ_ONLY=true): payload
+        # generation is offloaded to the kharon/nax sidecars, so the server itself
+        # does not compile anything, but we leave a writable rootfs to tolerate any
+        # stray startup write. Healthcheck reaching `healthy` implies the server bound 4321
         # successfully as the unprivileged user.
         run: |
           mkdir -p data
@@ -142,6 +143,65 @@ jobs:
             golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 \
             bash -c 'cd /src && go build -o /smoke ./cmd/smoke && /smoke'
           docker rm -f nax-builder >/dev/null
+      - name: Build kharon-builder sidecar image
+        timeout-minutes: 25
+        # Verifies the pinned Kharon source + cross-toolchain + mingw/objcopy patches
+        # land on BOTH arches. The arm64 objcopy fix (patches/kharon-beacon-objcopy.patch)
+        # is the thing most likely to decay differently per-arch: on arm64 the default
+        # `objcopy` is an ARM triple that cannot read x86-64 PE files, so the beacon
+        # .bin comes out 0 bytes unless the patch points at x86_64-w64-mingw32-objcopy.
+        run: docker build -f Dockerfile.kharon-builder -t adaptixc2-omni-kharon-builder:${{ matrix.runner }} .
+      - name: Smoke-test the Kharon builder sidecar end-to-end
+        timeout-minutes: 20
+        # Drives a real PIC beacon (bin) build then a loader (exe) build through the
+        # builder's unix socket exactly like the teamserver agent does. The smoke
+        # client is pure Go (it dials the socket); the builder does the mingw/nasm/
+        # objcopy compile, so build + run it inside a golang container that shares the
+        # builder's /run/kharon socket dir and /app/kharon source tree. The builder runs
+        # as root here (a build-correctness probe, not a privilege-model test — that is
+        # covered by the runtime smoke and the build job above) so it can create its
+        # socket in the shared dir regardless of volume ownership.
+        run: |
+          set -e
+          # Fresh dirs each run: a stale socket file from a crashed prior run would
+          # otherwise make the -S check report 'up' prematurely.
+          rm -rf "$PWD/.ci-kharon-sock" "$PWD/.ci-kharon-src"
+          mkdir -p "$PWD/.ci-kharon-sock" "$PWD/.ci-kharon-src"
+          # Copy the pinned Kharon tree OUT of the freshly built image, so this smoke
+          # test exercises exactly what the committed image ships (not host state).
+          cid=$(docker create adaptixc2-omni-kharon-builder:${{ matrix.runner }})
+          docker cp "$cid:/app/kharon/." "$PWD/.ci-kharon-src/"
+          docker rm "$cid" >/dev/null
+          # Start the builder; share a writable /run/kharon (socket) + /app/kharon (tree).
+          docker run -d --name kharon-builder 
+            -v "$PWD/.ci-kharon-sock:/run/kharon" 
+            -v "$PWD/.ci-kharon-src:/app/kharon" 
+            -u root 
+            adaptixc2-omni-kharon-builder:${{ matrix.runner }}
+          # Wait for the socket to appear (the worker listens immediately).
+          up=0
+          for i in $(seq 1 30); do
+            if docker exec kharon-builder test -S /run/kharon/builder.sock 2>/dev/null; then
+              echo "[+] builder socket up after $i check(s)"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ "$up" != "1" ]; then
+            echo "::error::builder socket never appeared on /run/kharon"
+            docker logs kharon-builder
+            exit 1
+          fi
+          # Build the smoke client for linux inside a golang container, then run it
+          # sharing BOTH /run/kharon (to dial the socket) and /app/kharon (source tree).
+          docker run --rm 
+            -v "$PWD/sidecar/kharon-builder:/src" 
+            -v "$PWD/.ci-kharon-sock:/run/kharon" 
+            -v "$PWD/.ci-kharon-src:/app/kharon" 
+            -e KHARON_SRC=/app/kharon 
+            -e KHARON_BUILDER_SOCK=/run/kharon/builder.sock 
+            golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 
+            bash -c 'cd /src && go build -o /smoke ./cmd/smoke && /smoke'
+          docker rm -f kharon-builder >/dev/null
       - name: Vulnerability scan (Trivy)
         # Fail the build on any CRITICAL or HIGH severity CVE that has a fix
         # available. `ignore-unfixed` excludes Debian unfix-yet packages so CI
