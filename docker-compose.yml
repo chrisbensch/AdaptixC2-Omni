@@ -22,13 +22,14 @@ services:
     image: adaptixc2-omni:latest
     container_name: adaptixc2-omni-server
     network_mode: host
-    # Default read-only rootfs is OFF because the Kharon agent compiles beacon +
-    # loader at runtime (Config.cc, clang++, nasm, make, objcopy) — that writes
-    # into the rootfs. Nax compiles in the nax-builder sidecar instead, so a
-    # Nax-only deployment can flip this ON (compilation is offloaded and every
-    # runtime write goes to the writable ./data bind-mount at /app/data; logs go
-    # to stdout). No tmpfs is needed — the server never touches /tmp.
-    read_only: ${ADAPTIX_READ_ONLY:-false}
+    # Default read-only rootfs is ON. Both payload builders are now sidecars that
+    # compile off-server: the kharon-builder (see below) owns the Kharon beacon +
+    # loader, and the nax-builder owns the Nax payload. So no runtime write touches
+    # the rootfs — every write goes to the writable ./data bind-mount at /app/data
+    # (state + rendered profile), the two shared socket dirs, or stdout (logs).
+    # tmpfs:/tmp matches the hardened posture; the server does not rely on it.
+    # Flip ADAPTIX_READ_ONLY=false only to debug a stray rootfs write.
+    read_only: ${ADAPTIX_READ_ONLY:-true}
     cap_drop:
       - ALL
     cap_add:
@@ -64,6 +65,13 @@ services:
       # builder creates it 0o660 owned by `naxb`, and the server is joined to the
       # `naxb` group (see the Dockerfile usermod), so no DAC is needed here.
       - nax-sock:/run/nax
+      # Shared builder socket dir for the kharon-builder sidecar (a named volume,
+      # like nax-sock). The kharon-builder writes its unix socket here and the
+      # server's agent_kharon dials it. The server mounts it read-write because
+      # connect() to a unix socket needs write access on the socket file; the
+      # builder creates it 0o660 owned by `kharonb`, and the server is joined to
+      # the `kharonb` group (see the Dockerfile usermod), so no DAC is needed.
+      - kharon-sock:/run/kharon
     environment:
       - TZ=${TZ:-UTC}
       # Override credentials by uncommenting and setting before first start.
@@ -96,12 +104,52 @@ services:
       - SETUID             # run as the user
       - SETGID
     security_opt:
-      - no-new-Privs
+      - no-new-privileges:true
     # Shared socket dir — a named volume so the server (above) sees the same
     # /run/nax the builder writes into. tmpfs would be a private per-container
     # mount and the socket wouldn't cross containers.
     volumes:
       - nax-sock:/run/nax
+    mem_limit: 2g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Kharon builder sidecar. Compiles the Kharon PIC beacon + loader on request,
+  # reached over the shared /run/kharon unix socket (no external port). Runs in its
+  # own image (Dockerfile.kharon-builder) with the pinned Kharon source + cross
+  # toolchain, so the teamserver image stays lean. network_mode: none keeps the
+  # build traffic local — only the socket crosses between the two containers.
+  # read_only: true + the DAC_OVERRIDE write on the socket is the tightened form
+  # (the builder writes its .o/.bin into /app/kharon, which is its own image tree;
+  # see the builder image). no-new-privs on; caps are the minimal set.
+  kharon-builder:
+    profiles: ["runtime"]
+    image: adaptixc2-omni-kharon-builder:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.kharon-builder
+    container_name: adaptixc2-kharon-builder
+    network_mode: none
+    user: "kharonb"                        # non-root (UID 10003)
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE       # write the .o/.bin it builds into the tree
+      - CHOWN              # normalize ownership on what it writes
+      - SETUID             # run as the user
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    # Shared socket dir — a named volume so the server (above) sees the same
+    # /run/kharon the builder writes into. tmpfs would be a private per-container
+    # mount and the socket wouldn't cross containers.
+    volumes:
+      - kharon-sock:/run/kharon
     mem_limit: 2g
     pids_limit: 512
     logging:
@@ -144,4 +192,9 @@ services:
 # containers — each container's own tmpfs mount is private.
 volumes:
   nax-sock:
+    driver: local
+  # Same idea for the kharon-builder sidecar: shares /run/kharon between the
+  # kharon-builder and the server so the server's agent_kharon can dial the
+  # builder's unix socket.
+  kharon-sock:
     driver: local
