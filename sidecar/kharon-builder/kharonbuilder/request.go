@@ -138,6 +138,9 @@ func (r KharonBuildRequest) makeArgs() []string {
 		fmt.Sprintf("KH_FORK_PIPENAME=\"%s\"", r.KhForkPipeName),
 		fmt.Sprintf("KH_SPAWNTO_X64=\"%s\"", r.KhSpawnto),
 		fmt.Sprintf("KH_BOF_HOOK_ENABLED=%s", b10(r.KhBofHookEnabled)),
+		// C-array initializer for Config.cc's BYTE HttpConfig[] = HTTP_MALLEABLE_BYTES.
+		// Double-quoted so make keeps the quotes and the shell strips them (preventing
+		// brace expansion of the 0x.. list) before clang sees the bare `{ 0x.. }` array.
 		fmt.Sprintf("HTTP_MALLEABLE_BYTES=\"%s\"", r.HTTPMalleableHex),
 		fmt.Sprintf("HTTP_CALLBACK_COUNT=%d", r.HTTPCallbackCount),
 	)
