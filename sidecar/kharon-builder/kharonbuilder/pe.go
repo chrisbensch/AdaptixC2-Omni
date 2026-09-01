@@ -110,6 +110,17 @@ var compileWrapper = func(req *KharonBuildRequest, shellcode []byte) ([]byte, st
 		return nil, "", fmt.Errorf("loader source %s not found: %w", sourcePath, err)
 	}
 
+	// Seal: prove the Shellcode.h we just generated compiles against the pinned
+	// src_loader before spending time linking a PE. This is the content-vs-pinned-
+	// tree seam — if the server's beacon format drifts from what the pinned loader
+	// expects, the generated header won't parse here and we fail fast with a message
+	// that names the drift instead of a late link/PE failure. Syntax-only (no link)
+	// keeps it fast and isolates header-vs-compiler drift from a payload packaging
+	// failure (the latter surfaces later as a linker error, not a header parse error).
+	if err := syntaxCheckLoader(compiler, sourcePath, includeDir); err != nil {
+		return nil, "", err
+	}
+
 	binDir := filepath.Join(kharonRoot, "src_loader", "Bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return nil, "", fmt.Errorf("mkdir bin: %w", err)
@@ -153,4 +164,28 @@ var compileWrapper = func(req *KharonBuildRequest, shellcode []byte) ([]byte, st
 		return nil, "", fmt.Errorf("read output PE: %w", err)
 	}
 	return peBytes, outName, nil
+}
+
+// syntaxCheckLoader runs clang++ -fsyntax-only on the loader source against the
+// same include set as the real compile, proving the generated Shellcode.h parses
+// against the pinned src_loader before the (expensive) link step. It isolates
+// content-vs-pinned-tree drift (server generator vs pinned compiler) from a payload
+// packaging failure, so a beacon-format change fails locally and with a message that
+// tells the operator which side to align. Syntax-only intentionally omits the link
+// flags (-mwindows/-nostdlib/-s/-l*); they don't affect header parsing and only slow
+// the check, and -fsyntax-only stops after semantic analysis so no linking happens.
+func syntaxCheckLoader(compiler, sourcePath, includeDir string) error {
+	args := []string{"-target", "x86_64-w64-mingw32", "-fsyntax-only", "-I", includeDir}
+	for _, p := range mingwCXXIncludePaths() {
+		args = append(args, "-I", p)
+	}
+	args = append(args, sourcePath)
+	if _, err := exec.Command(compiler, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf(
+			"generated Shellcode.h does not compile against pinned src_loader: "+
+				"server beacon format or pinned loader tree is out of sync "+
+				"(regenerator vs compiler drift). Align the beacon generator with the "+
+				"pinned src_loader or refresh the pinned tree.\n%s", err)
+	}
+	return nil
 }
