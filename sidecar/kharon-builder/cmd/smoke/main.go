@@ -34,6 +34,22 @@ func main() {
 	_ = envOr("KHARON_SRC", defaultKharonSrc)
 	sock := envOr("KHARON_BUILDER_SOCK", defaultSockPath)
 
+	// Format arg selects which loader(s) to build after the beacon. The beacon
+	// (bin) always builds first; the arg picks the follow-up loader PE(s)
+	// (exe|dll|svc) or "none" to stop after the beacon. With no arg, build ALL
+	// loader formats so a single default run exercises the full beacon+loader
+	// path for every loader type (this is what CI runs, so it covers the svc
+	// signature fix and the dll/exe paths too).
+	formats := []string{"exe", "dll", "svc"}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "none":
+			formats = nil
+		default:
+			formats = []string{os.Args[1]}
+		}
+	}
+
 	// 1) Raw PIC beacon (bin) — proves the beacon make + objcopy path.
 	binReq := &kharonbuilder.KharonBuildRequest{
 		Target:           "x64",
@@ -55,25 +71,28 @@ func main() {
 	}
 	report("beacon (bin)", resp)
 
-	// 2) Loader PE (exe) — proves the Shellcode.h write + clang++ wrapper path.
-	exeReq := &kharonbuilder.KharonBuildRequest{
-		Target:           "x64",
-		OutputFormat:     "exe",
-		KhAgentUUID:      "smoke-0002",
-		KhSleepTime:      "5",
-		KhJitter:         20,
-		KhSleepMask:      0,
-		KhHeapMask:       false,
-		KhSyscall:        0,
-		KhAmsiEtwBypass:  0,
-		KhBofHookEnabled: false,
-		HTTPMalleableHex: defaultMalleableHex,
+	// 2) Loader PEs — proves the Shellcode.h write + clang++ wrapper path for
+	// each loader type.
+	for _, format := range formats {
+		loaderReq := &kharonbuilder.KharonBuildRequest{
+			Target:           "x64",
+			OutputFormat:     format,
+			KhAgentUUID:      "smoke-0002",
+			KhSleepTime:      "5",
+			KhJitter:         20,
+			KhSleepMask:      0,
+			KhHeapMask:       false,
+			KhSyscall:        0,
+			KhAmsiEtwBypass:  0,
+			KhBofHookEnabled: false,
+			HTTPMalleableHex: defaultMalleableHex,
+		}
+		loaderResp, err := client.Build(loaderReq)
+		if err != nil {
+			fail("loader (%s) build through %s: %v", format, sock, err)
+		}
+		report(fmt.Sprintf("loader (%s)", format), loaderResp)
 	}
-	exeResp, err := client.Build(exeReq)
-	if err != nil {
-		fail("loader (exe) build through %s: %v", sock, err)
-	}
-	report("loader (exe)", exeResp)
 
 	fmt.Printf("[+] all kharon builder checks passed\n")
 }

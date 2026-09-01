@@ -55,6 +55,26 @@ func generateKharonShellcodeH(shellcode []byte) string {
 	return sb.String()
 }
 
+// mingwCXXIncludePaths returns the mingw-w64 C++ standard-library include paths
+// that Debian's clang++ does not know by default for -target x86_64-w64-mingw32.
+// GCC keeps the C++ headers under /usr/lib/gcc/<triple>/<ver>/include/c++ and the
+// arch-specific bits (which <cstdint> pulls in via <bits/c++config.h>) under
+// .../c++/<triple>/bits. Both levels are returned so the loader compiles. The
+// GCC version component is globbed because it is baked into the builder image
+// but not otherwise discoverable; an empty result simply yields a missing-header
+// error from the compiler below.
+func mingwCXXIncludePaths() []string {
+	const triple = "x86_64-w64-mingw32"
+	var paths []string
+	if top, err := filepath.Glob(filepath.Join("/usr/lib/gcc", triple, "*/include/c++")); err == nil && len(top) > 0 {
+		paths = append(paths, top[0])
+	}
+	if arch, err := filepath.Glob(filepath.Join("/usr/lib/gcc", triple, "*/include/c++", triple)); err == nil && len(arch) > 0 {
+		paths = append(paths, arch[0])
+	}
+	return paths
+}
+
 // compileWrapper writes Shellcode.h into the loader tree and compiles the PIC
 // payload into an exe/dll/svc PE using clang++ (invoked with an explicit arg
 // array, no shell). It mirrors pl_agent.go's clang++ invocation exactly. If
@@ -107,6 +127,17 @@ var compileWrapper = func(req *KharonBuildRequest, shellcode []byte) ([]byte, st
 		"-s",
 		"-lkernel32",
 		"-ladvapi32",
+	}
+
+	// clang++ (Debian's) knows the mingw C headers (/usr/x86_64-w64-mingw32/include,
+	// so <windows.h> resolves) but not the mingw C++ standard library, which GCC
+	// keeps under /usr/lib/gcc/<triple>/<ver>/include/c++ with arch-specific bits
+	// under .../c++/<triple>/bits. The loader's Shellcode.h includes <cstdint>, so
+	// add both levels. The version component is globbed (baked into the builder
+	// image but not otherwise discoverable); if neither path exists the loader
+	// simply fails with a missing-header error below.
+	for _, p := range mingwCXXIncludePaths() {
+		clangArgs = append(clangArgs, "-I", p)
 	}
 	if req.OutputFormat == "dll" {
 		clangArgs = append(clangArgs, "-shared")

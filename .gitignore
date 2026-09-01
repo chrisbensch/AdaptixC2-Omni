@@ -11,4 +11,4 @@ build/
 .DS_Store
 
 # Hindsight Data
-.pi/hindsight/
+.pi/

@@ -98,6 +98,14 @@ COPY Kharon/agent_kharon .
 COPY patches/kharon-beacon-objcopy.patch /kharon-beacon-objcopy.patch
 RUN cd /app/kharon && patch -p1 --forward < /kharon-beacon-objcopy.patch
 
+# Fix the svc loader's ServiceMain signature (CHAR *argv -> CHAR **argv). Upstream
+# SERVICE_TABLE_ENTRY expects LPSERVICE_MAIN_FUNCTIONA = void(*)(ulong,char**), so
+# clang++ rejects the single-pointer form. This is a pre-existing upstream bug; patch
+# it here (the submodule stays clean). -p2 strips a/agent_kharon/ so the patch lands
+# on src_loader/... under /app/kharon.
+COPY patches/kharon-svc-loader-signature.patch /kharon-svc-loader-signature.patch
+RUN cd /app/kharon && patch -p2 --forward < /kharon-svc-loader-signature.patch
+
 # Prebuild the invariant beacon .o files at image build, so runtime `make x64|x86`
 # only compiles Config.cc + links (seconds not minutes). Run BOTH prebuilds — the
 # plugin Makefile's `agent` target only runs prebuild-x64, but the builder needs

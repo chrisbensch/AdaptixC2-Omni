@@ -1,0 +1,22 @@
+diff --git a/agent_kharon/src_loader/Source/Main/Svc.cc b/agent_kharon/src_loader/Source/Main/Svc.cc
+index 1fdd44b..1d10629 100644
+--- a/agent_kharon/src_loader/Source/Main/Svc.cc
++++ b/agent_kharon/src_loader/Source/Main/Svc.cc
+@@ -4,7 +4,7 @@
+ SERVICE_STATUS ServiceStatus = {0};
+ SERVICE_STATUS_HANDLE ServiceStatusHandle = NULL;
+ 
+-VOID WINAPI ServiceMain( ULONG argc, CHAR *argv );
++VOID WINAPI ServiceMain( ULONG argc, CHAR **argv );
+ VOID WINAPI ServiceCtrlHandler( ULONG Ctrl );
+ VOID RunKharon( VOID );
+ 
+@@ -34,7 +34,7 @@ VOID RunKharon(VOID) {
+     }
+ }
+ 
+-VOID WINAPI ServiceMain( ULONG argc, CHAR *argv ) {
++VOID WINAPI ServiceMain( ULONG argc, CHAR **argv ) {
+     ServiceStatusHandle = RegisterServiceCtrlHandler( TEXT("Kharon"), ServiceCtrlHandler );
+ 
+     if ( ! ServiceStatusHandle ) {
