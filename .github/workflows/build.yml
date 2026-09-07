@@ -193,13 +193,13 @@ jobs:
           fi
           # Build the smoke client for linux inside a golang container, then run it
           # sharing BOTH /run/kharon (to dial the socket) and /app/kharon (source tree).
-          docker run --rm 
-            -v "$PWD/sidecar/kharon-builder:/src" 
-            -v "$PWD/.ci-kharon-sock:/run/kharon" 
-            -v "$PWD/.ci-kharon-src:/app/kharon" 
-            -e KHARON_SRC=/app/kharon 
-            -e KHARON_BUILDER_SOCK=/run/kharon/builder.sock 
-            golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 
+          docker run --rm \
+            -v "$PWD/sidecar/kharon-builder:/src" \
+            -v "$PWD/.ci-kharon-sock:/run/kharon" \
+            -v "$PWD/.ci-kharon-src:/app/kharon" \
+            -e KHARON_SRC=/app/kharon \
+            -e KHARON_BUILDER_SOCK=/run/kharon/builder.sock \
+            golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 \
             bash -c 'cd /src && go build -o /smoke ./cmd/smoke && /smoke'
           docker rm -f kharon-builder >/dev/null
       - name: Vulnerability scan (Trivy)
