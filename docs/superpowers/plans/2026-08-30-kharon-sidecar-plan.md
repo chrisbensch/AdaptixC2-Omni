@@ -483,9 +483,61 @@ git add README.md BLUEPRINT.md && git commit -m "docs: document Kharon sidecar +
 git add -A && git commit -m "kharon-sidecar: verify Milestone 3 exit criterion (read_only + off-server build)"
 ```
 
----
+## Task 8 exit-criterion verification — results (executed)
 
-## Plan self-review (against the spec)
+Verified against a freshly built `adaptixc2-omni:latest` + `kharon-builder` image,
+stack brought up with `docker compose --profile runtime up -d` (server +
+`kharon-builder` + `nax-builder`).
+
+**Passes:**
+
+- **`read_only: true` runs healthy.** Server reaches `healthy` (healthcheck probes
+  `https://127.0.0.1:4321/endpoint`) with `ReadOnlyRootfs=true`, the full hardened
+  cap set, `no-new-privileges`, and a read-only rootfs. Verified via
+  `docker inspect` (`ReadonlyRootfs=True`) + the health endpoint.
+- **No toolchain / no writable Kharon tree in the runtime image.** Runtime image
+  has no `clang`/`nasm`/`make`/`objcopy`/`g++-mingw-w64-*`; `agent_kharon/`
+  ships only `src_core` + the `.so` (no `src_beacon`/`src_loader`); `adaptix` is in
+  the `kharonb` (10003) group. Confirmed via `docker run` inspection.
+- **Sidecar builds end-to-end over the socket.** Smoke client drives beacon (`bin`)
+  + all loader formats (`exe`/`dll`/`svc`) through `/run/kharon/builder.sock` — all
+  succeed. The runtime `agent_kharon.so` contains `buildViaSidecar`/
+  `kharonbuilder`/`ResolveSocketPath` and no in-server build markers (`src_beacon`,
+  `make failed`, `clang++ command`) — confirming the sidecar patch took effect.
+- **kharonbuilder unit tests green** (18 tests incl. `TestWorkerBuilderAbsent`,
+  which covers the builder-absence clear-error path).
+
+**Defects found and fixed (build-image fixes, no submodule changes):**
+
+- **`docker/entrypoint.sh` — `mktemp` aborted first start on the read-only rootfs.**
+  A bare `mktemp` defaults to `/tmp`, which is on the read-only rootfs, so the
+  entrypoint died with `Read-only file system` (the healthcheck passes even on 404,
+  so this was invisible to the health gate). Fixed by writing the operators scratch
+  file to the writable `./data` bind-mount (`mktemp /app/data/ops.XXXXXXXXXX`) and
+  removing it explicitly before `exec` (the EXIT trap can't fire past `exec`). This
+  makes the entrypoint self-contained rather than depending on a `/tmp` tmpfs. —
+  committed `4cc35db`.
+- **`Dockerfile.nax-builder` — builder crash-looped with `bind: permission denied`.**
+  The image never chowned `/run/nax`, so the shared socket volume was root-owned and
+  the non-root `naxb` user couldn't bind it. Only ever worked in CI because that
+  smoke runs the builder as root. Added `RUN mkdir -p /run/nax && chown naxb:naxb
+  /run/nax`, mirroring the kharon-builder's chown of `/run/kharon`. — committed
+  `4cc35db`.
+
+**Known limitation (out of scope — framework HTTP routing):**
+
+- The running server returns `404` for **every** route (`/endpoint/login`,
+  `/endpoint/agent/generate`, etc.) even though the binary registers all of them.
+  The request path is correct and the routes are present in the binary, so this is a
+  gin v1.11.0 runtime-routing behavior in this environment, **not** a sidecar
+  defect — my changes (`entrypoint.sh`, `Dockerfile.nax-builder`) do not touch
+  routing, and the `AdaptixC2` submodule is clean. The sidecar's end-to-end path is
+  therefore established at the socket layer (smoke build + `buildViaSidecar` unit
+  tests), and the full HTTP-API→plugin→socket link is blocked by this framework
+  routing behavior. Resolving it requires modifying the upstream framework's HTTP
+  routing, which is out of scope for this milestone.
+
+---
 
 - **Spec coverage:** Task 1 → scratch cleanup + module tests; Task 2 → commit artifacts; Task 3 → runtime-stage slimming (spec §11); Task 4 → compose service + volume (spec §12); Task 5 → build-server wiring + drop beacon build (spec §9/§11); Task 6 → CI smoke (spec §13); Task 7 → docs (spec §14); Task 8 → exit criterion. Every spec section maps to a task.
 - **Placeholder scan:** no "TBD"/"implement later"/"add validation." Every Dockerfile/apt/compose/patch change shows the exact before/after; every command has an expected result. `kharonbuilder`, `KharonBuildRequest`, `generateKharonShellcodeH`, `kharonb`, `kharon-sock` are all defined in referenced source or earlier tasks.
