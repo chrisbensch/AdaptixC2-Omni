@@ -173,10 +173,10 @@ jobs:
           docker cp "$cid:/app/kharon/." "$PWD/.ci-kharon-src/"
           docker rm "$cid" >/dev/null
           # Start the builder; share a writable /run/kharon (socket) + /app/kharon (tree).
-          docker run -d --name kharon-builder 
-            -v "$PWD/.ci-kharon-sock:/run/kharon" 
-            -v "$PWD/.ci-kharon-src:/app/kharon" 
-            -u root 
+          docker run -d --name kharon-builder \
+            -v "$PWD/.ci-kharon-sock:/run/kharon" \
+            -v "$PWD/.ci-kharon-src:/app/kharon" \
+            -u root \
             adaptixc2-omni-kharon-builder:${{ matrix.runner }}
           # Wait for the socket to appear (the worker listens immediately).
           up=0
