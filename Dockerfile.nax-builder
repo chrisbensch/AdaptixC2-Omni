@@ -107,6 +107,14 @@ RUN cd /nax && \
 COPY --from=build /nax-builder /nax-builder
 RUN chown -R naxb:naxb /nax && chmod 0755 /nax-builder
 
+# The /run/nax socket dir is a named volume in compose, so it inherits its
+# ownership from the image content at that path when the volume is first
+# initialised. Without this chown the volume is root-owned and the builder
+# (running as the non-root `naxb`) gets "bind: permission denied" — the socket
+# only ever worked in CI because that smoke runs the builder as root. Mirror the
+# kharon-builder's handling of /run/kharon.
+RUN mkdir -p /run/nax && chown naxb:naxb /run/nax
+
 # The shared /run/nax (the socket) is a named volume in compose (writable there). The
 # worker writes the unix socket into it; the teamserver dials it.
 ENV NAX_SRC=/nax
