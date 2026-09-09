@@ -71,7 +71,12 @@ if [ ! -f /app/data/profile.yaml ]; then
     : "${ADAPTIX_TEAMSERVER_PASSWORD:=$(openssl rand -hex 24)}"
     : "${ADAPTIX_OPERATORS:=operator1:$(openssl rand -hex 16)}"
 
-    ops_file="$(mktemp)"
+    ops_file="$(mktemp /app/data/ops.XXXXXXXXXX)"
+    # Write the scratch file into the writable ./data bind-mount, not /tmp: the
+    # runtime rootfs is read-only, so a bare mktemp (defaulting to /tmp) fails with
+    # "Read-only file system" and aborts first start. /app/data is the one writable
+    # location the entrypoint has before dropping privileges. The EXIT trap below
+    # cleans it up if we abort mid-render (before the explicit rm further down).
     trap 'rm -f "${ops_file}"' EXIT
 
     # Bash array iteration via IFS+read avoids the word-splitting/globbing
@@ -113,6 +118,11 @@ if [ ! -f /app/data/profile.yaml ]; then
     # the container log forever, so a `docker logs` reader could otherwise
     # pull historic credentials out of the log even after rotation.
     echo "[+] Rendered /app/data/profile.yaml; credentials persisted to /app/data/credentials.txt"
+
+    # The EXIT trap won't fire past the exec below (exec replaces this shell), so
+    # remove the scratch file explicitly now that it has served its purpose. Keeps
+    # the host-side ./data bind-mount clean across restarts.
+    rm -f "${ops_file}"
 fi
 
 # Hand /app/data (directory + anything we just created above + anything from
