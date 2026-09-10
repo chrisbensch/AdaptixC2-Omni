@@ -4,13 +4,20 @@ Working session: begin moving the **Kharon** agent's in-server payload compilati
 onto a sidecar, following the Nax-sidecar pattern (Milestone 2). All design
 decisions are now resolved (see below); next step is the full spec.
 
-> **State:** design phase, not yet implemented. No code written for Milestone 3.
-> The Nax sidecar (Milestone 2) is the reference implementation for how this should
-> look.
+> **State: COMPLETE and merged to `main`.**
+>
+> This file is a historical design record. The design it captured is now shipped.
+> Do **not** treat "next step is the full spec" / "resume point: draft the spec"
+> as live — the spec, plan, implementation, and CI all landed. See
+> "Completion summary" below for the as-built state and remaining open items.
 >
 > **Update (2026-08-28, session 3):** reference + Kharon code research complete
 > (see "Research findings"). Paused before drafting the full spec. Resume point:
 > draft the spec from this file, using the research findings as ground truth.
+>
+> **Update (2026-09-07, resumed):** Milestone 3 was implemented from this design and
+> merged. All decisions marked CONFIRMED here were built as specified; the as-built
+> result and anything still open are captured in "Completion summary".
 
 ---
 
@@ -32,6 +39,9 @@ a compiled payload. Mirrors the Milestone 2 rationale:
 This is the step where the toolchain *fully* leaves the server (Kharon was deferred
 through Milestone 2 precisely because it still compiles in-server, which is what
 kept `read_only` off).
+
+**This has now happened.** Both payload builders run as off-server sidecars; the
+runtime server image ships no cross toolchain, and `read_only` defaults to `true`.
 
 ---
 
@@ -218,12 +228,49 @@ fixes it as a side effect — worth calling out explicitly in the spec.
 
 ---
 
-## Implementation plan (pending design approval)
+## Completion summary (as-built, merged)
 
-Per repo process: this goes through the brainstorming → spec → writing-plans flow.
-All open questions are resolved; next steps:
+Milestone 3 is **implemented and merged to `main`** (commits `a29b218` "Kharon
+sidecar (#11)" and `18c5bc9` "CI-parity build + smoke-test the nax-builder
+sidecar (amd64 + arm64)"). Every decision marked CONFIRMED in this design was
+built as specified.
 
-1. Draft design doc (this file → full spec).
-2. Self-review the spec (placeholders, contradictions, scope, ambiguity).
-3. User reviews the spec.
-4. Invoke `writing-plans` skill to create the implementation plan.
+**As-built state:**
+
+- Two sidecars under `sidecar/`: `kharon-builder/` (`kharonbuilder` pkg) and
+  `nax-builder/` (`naxbuilder` pkg). Each is a separate image + unix-socket
+  worker; the server performs no native compilation.
+- Kharon: the Go plugin (`agent_kharon.so`) still builds in the server image, but
+  the beacon + loader compile off-server in `kharon-builder` (network-isolated,
+  `network_mode: none`). Nax mirrors this.
+- `docker-compose.yml`: `kharon-builder` + `nax-builder` services, each with its
+  own named socket volume (`kharon-sock:/run/kharon`, `nax-sock:/run/nax`). The
+  server is joined to the `kharonb`/`naxb` groups to dial the 0o660 sockets. The
+  `builder` service defaults to `read_only: true` (`ADAPTIX_READ_ONLY:-true`).
+- CI (`.github/workflows/build.yml`, amd64 + arm64): builds **both** builder
+  images and smoke-tests each end-to-end over its unix socket (copy the pinned
+  source tree out of the image, start the builder, run the in-repo smoke client
+  sharing the socket + source volume).
+- Server image: cross toolchain and `src_beacon`/`src_loader` removed; `src_core`
+  kept.
+
+**Still open (non-blocking):**
+
+- **NaX real-profile decode** — the nax smoke synthesizes a value-trivial
+  (`0x00`) `Config_profile.h`, so the beacon *compiles* but does not decode into a
+  live C2 callback. A real-profile run needs the server's pure-Go generators + a
+  running teamserver (BLUEPRINT §10).
+- **NaX header-writing ownership** — the request carries `ConfigH`/
+  `ConfigProfileH`/`ConfigSleepmaskH` (base64); unresolved question is whether the
+  worker should own writing these generated headers into `src_beacon/include/`
+  (current approach) or that should happen elsewhere.
+- **gin HTTP-routing 404** (upstream AdaptixC2) remains a known, accepted
+  out-of-scope framework limitation; the sidecars build over the socket and are
+  unaffected.
+
+**Historical note (do not act on):** earlier revisions of this file and the
+project memory described Milestone 3 as "design phase / partially built /
+uncommitted / pending wiring and CI." That is stale — the work is merged. The
+implementation lessons in "Research findings" (patch path conventions, `go work
+sync` file deletion, mingw `-I` paths, objcopy fixes, socket-on-named-volume) are
+still the durable reference.
