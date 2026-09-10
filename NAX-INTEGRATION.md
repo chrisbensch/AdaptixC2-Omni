@@ -301,7 +301,7 @@ No files below have been changed for NaX yet. Likely future integration points a
 - `.github/workflows/build.yml`
 - `README.md`
 - `BLUEPRINT.md`
-- `CLAUDE.md`
+- `AGENTS.md`
 
 ## Verification checklist
 

@@ -21,7 +21,7 @@ The workspace itself is a git repo. The four upstream projects are git **submodu
 ├── PostEx-Arsenal/       ← submodule: entropy-z/PostEx-Arsenal  (Kharon-flavored modules)
 │
 ├── BLUEPRINT.md          ← this file
-├── CLAUDE.md             ← context for future Claude conversations (separate concern)
+├── AGENTS.md             ← context file for AI coding assistants (Codex); separate concern
 ├── README.md             ← user-facing project overview
 ├── Dockerfile            ← unified server build (multi-stage, host-arch by default)
 ├── docker-compose.yml    ← services for build/runtime/build-client
@@ -767,7 +767,7 @@ if(WIN32)
 endif()
 ```
 
-This is a local working-tree edit in the submodule. Do not commit it — the submodule tree must stay clean (see "Cross-cutting conventions" in CLAUDE.md).
+This is a local working-tree edit in the submodule. Do not commit it — the submodule tree must stay clean (see "Cross-cutting conventions" in AGENTS.md).
 
 ### 11.4 Build
 

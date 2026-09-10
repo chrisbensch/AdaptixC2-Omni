@@ -185,7 +185,7 @@ AdaptixC2-Omni/
 ├── .dockerignore         ← excludes submodule .git pointer files from build context
 │
 ├── BLUEPRINT.md          ← detailed integration recipe (read this when refreshing or debugging)
-├── CLAUDE.md             ← context file for AI coding assistants
+├── AGENTS.md             ← context file for AI coding assistants (Codex)
 ├── README.md             ← you are here
 │
 ├── data/                 ← runtime state (gitignored; bind-mounted into the server container)
@@ -267,14 +267,14 @@ If a `git apply --check` command fails, upstream has drifted into that patch's h
 
 ## Architecture in one paragraph
 
-AdaptixC2 splits into three independently-built pieces: a Go **teamserver** (one process, SQLite-backed, HTTPS+WebSocket on `:4321/endpoint`), a Qt6/C++ **GUI client** (operator UI, connects via WebSocket and renders sync packets), and a set of **extender Go-plugins** (`.so` files loaded at runtime — every listener and every agent type is a plugin). The teamserver–extender contract is the [`axc2`](https://github.com/Adaptix-Framework/axc2) package; plugins never reach into teamserver internals. Operator behavior is scriptable via **AxScript** (a `goja`-embedded JS engine, both server- and client-side) — that's how BOFs are wrapped into operator commands and how the Kharon and Extension-Kit module sets register their UI. See [CLAUDE.md](./CLAUDE.md) for a deeper architectural tour written for AI coding assistants.
+AdaptixC2 splits into three independently-built pieces: a Go **teamserver** (one process, SQLite-backed, HTTPS+WebSocket on `:4321/endpoint`), a Qt6/C++ **GUI client** (operator UI, connects via WebSocket and renders sync packets), and a set of **extender Go-plugins** (`.so` files loaded at runtime — every listener and every agent type is a plugin). The teamserver–extender contract is the [`axc2`](https://github.com/Adaptix-Framework/axc2) package; plugins never reach into teamserver internals. Operator behavior is scriptable via **AxScript** (a `goja`-embedded JS engine, both server- and client-side) — that's how BOFs are wrapped into operator commands and how the Kharon and Extension-Kit module sets register their UI. See [AGENTS.md](./AGENTS.md) for a deeper architectural tour written for AI coding assistants.
 
 ---
 
 ## Further reading
 
 - **[BLUEPRINT.md](./BLUEPRINT.md)** — exhaustive integration recipe: every Dockerfile stage explained, every patch's diff, every gotcha encountered during the build, the upstream-refresh flow, and the verification checklist.
-- **[CLAUDE.md](./CLAUDE.md)** — codebase tour and conventions, intended as context for Claude Code or other AI coding assistants when working in this tree.
+- **[AGENTS.md](./AGENTS.md)** — codebase tour and conventions, intended as context for AI coding assistants (Codex) working in this tree.
 - Upstream documentation:
   - [AdaptixC2 docs](https://adaptix-framework.gitbook.io/adaptix-framework)
   - [Kharon docs](https://github.com/entropy-z/Kharon/tree/main/doc)
@@ -300,6 +300,6 @@ If you find a bug in the framework, an agent, or a BOF, please file it upstream 
 
 ## License
 
-The build harness in this repository (`Dockerfile`, `docker-compose.yml`, `profile.kharon.yaml`, `scripts/`, `patches/`, `docker/`, `.github/`, `BLUEPRINT.md`, `CLAUDE.md`, `README.md`) is released under the [MIT License](./LICENSE).
+The build harness in this repository (`Dockerfile`, `docker-compose.yml`, `profile.kharon.yaml`, `scripts/`, `patches/`, `docker/`, `.github/`, `BLUEPRINT.md`, `AGENTS.md`, `README.md`) is released under the [MIT License](./LICENSE).
 
 Submodule contents are governed by their own upstream licenses; consult each submodule's `LICENSE` file before redistribution. In particular, AdaptixC2 carries explicit notices about authorized use that you must preserve.

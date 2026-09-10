@@ -1,5 +1,7 @@
 # NaX Sidecar Prototype — Implementation Plan
 
+> **AS-BUILT STATUS (historical).** This plan records the Milestone-2 prototype, which was implemented and merged to `main` (see `docs/superpowers/plans/nax-sidecar-smoke-status.md`). Two assumptions here no longer hold: the `/run/nax` builder socket is shared via a **named volume** (`nax-sock:/run/nax`), **not a tmpfs mount** (a per-container tmpfs is private and the socket never crosses between containers); and `read_only: true` **is** restored by default and the **Kharon** agent was also moved to its own sidecar (`kharon-builder`, Milestone 3). The milestone-scoped scope/exit-criterion table below is historical — the as-built state is in the status doc and in `AGENTS.md` / `README.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Route `agent_nonameax` Windows payload generation through a dedicated builder worker reached over a Unix socket, so the teamserver performs no native compilation and ships no NaX source tree.

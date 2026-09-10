@@ -5,19 +5,20 @@ sidecar, reusing the Milestone-2 Nax pattern. All design decisions are confirmed
 this is the complete design document. Reference implementation:
 `sidecar/nax-builder/` (package `naxbuilder`).
 
-> **State:** design complete; the sidecar implementation already exists but is
-> **uncommitted and unwired**. This file is the source of truth for the
-> implementation plan, which is primarily *wiring-in* + commit + docs, not a
-> from-scratch build.
+> **AS-BUILT STATUS (historical).** This Milestone-3 design was implemented and
+> merged to `main`. Everything below is now shipped: `sidecar/kharon-builder/`
+> (full module), `Dockerfile.kharon-builder`,
+> `patches/adaptix-kharon-sidecar.patch` (server integration, 4 hunks), and
+> `patches/kharon-beacon-objcopy.patch` (arm64 objcopy fix). The sidecar is wired
+> into the main Dockerfile runtime stage, `docker-compose.yml`, and CI; the
+> server image is slimmed (no cross toolchain / Kharon source tree), which is
+> what lets `read_only: true` run by default.
 >
-> **Already implemented (uncommitted, in the working tree):**
-> - `sidecar/kharon-builder/` — full module (`kharonbuilder`: frame/request/worker/build/pe + tests).
-> - `Dockerfile.kharon-builder` — standalone builder image (with the arm64 objcopy fix baked in).
-> - `patches/adaptix-kharon-sidecar.patch` — server integration (4 hunks).
-> - `patches/kharon-beacon-objcopy.patch` — arm64 objcopy fix.
-> - `tmp_pl_kharon_sidecar.go` / `tmp_pl_kharon_sidecar_test.go` — root scratch prototypes (to be removed).
->
-> **Not yet done:** main-Dockerfile runtime slimming, `docker-compose.yml` service + volume, CI smoke test, README/BLUEPRINT updates.
+> This file is a historical design record — the as-built state, remaining open
+> items, and session-3 research findings are in
+> `docs/superpowers/specs/2026-08-28-kharon-sidecar-status.md`, and the shipped
+> runtime posture is in `AGENTS.md` / `README.md`. The implementation plan below
+> (wiring-in + commit + docs) is preserved for history only.
 >
 > **Parent status doc:** `2026-08-28-kharon-sidecar-status.md` (open questions +
 > confirmed decisions + session-3 research findings). This file expands those into

@@ -4,6 +4,8 @@
 **Status:** Approved design (Option A). Implementation plan follows.
 **Scope:** Milestone 2 only — route `agent_nonameax` payload generation through a single builder worker over a Unix socket. Does **not** change the default image posture, does **not** touch Kharon, does **not** add hardening beyond prototype defaults.
 
+> **AS-BUILT STATUS (historical).** This Milestone-2 design was implemented and merged to `main` (see `docs/superpowers/plans/nax-sidecar-smoke-status.md`). Its scope assumptions are now historical: the `/run/nax` builder socket is shared via a **named volume** (`nax-sock:/run/nax`), **not** a tmpfs mount — a per-container tmpfs is private and the socket would never cross between the builder and server containers; `read_only: true` **is** restored and runs by default; and the **Kharon** agent was also moved to its own sidecar (`kharon-builder`, Milestone 3). The shipped truth lives in `AGENTS.md`, `README.md`, and the status doc — not in this milestone-scoped table.
+
 ---
 
 ## 1. Problem
